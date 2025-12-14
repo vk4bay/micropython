@@ -409,3 +409,7 @@ void boardctrl_startup(void);
 #ifndef MICROPY_ESP_IDF_ENTRY
 #define MICROPY_ESP_IDF_ENTRY app_main
 #endif
+
+#define MICROPY_PY_FRAMEBUF (1)
+
+

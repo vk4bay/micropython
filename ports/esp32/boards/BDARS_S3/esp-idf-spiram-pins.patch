@@ -1,0 +1,23 @@
+diff --git a/components/esp_psram/esp32s3/Kconfig.spiram b/components/esp_psram/esp32s3/Kconfig.spiram
+index 1bf74912d0..8f325008a7 100644
+--- a/components/esp_psram/esp32s3/Kconfig.spiram
++++ b/components/esp_psram/esp32s3/Kconfig.spiram
+@@ -39,12 +39,14 @@ menu "SPI RAM config"
+     endchoice
+ 
+     config SPIRAM_CLK_IO
+-        int
+-        default 30
++        int "SPIRAM CLK IO number"
++        range 0 49
++        default 33
+ 
+     config SPIRAM_CS_IO
+-        int
+-        default 26
++        int "SPIRAM CS IO number"
++        range 0 49
++        default 28
+ 
+     config SPIRAM_XIP_FROM_PSRAM
+         bool "Enable Executable in place from (XiP) from PSRAM feature"
