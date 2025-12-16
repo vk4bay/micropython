@@ -38,9 +38,6 @@ static const char *TAG = "ILI9488";
 #define ILI9488_PHYS_WIDTH  320
 #define ILI9488_PHYS_HEIGHT 480
 
-// DMA configuration
-#define DMA_BUFFER_SIZE 4080  // Just under 4KB to stay within SPI transaction limits
-
 // Special color value for "no fill"
 #define COLOR_NONE 0xFFFFFFFF
 
@@ -49,24 +46,27 @@ static spi_device_handle_t spi_device = NULL;
 static int dc_pin = -1;
 static int rst_pin = -1;
 static uint8_t *framebuffer = NULL;
-static uint8_t *dma_buffer = NULL;  // DMA-capable bounce buffer
-static int line_thickness = 1;
+static int line_thickness = 1;  // Default line thickness
 static uint8_t current_orientation = ORIENTATION_PORTRAIT;
-static int display_width = ILI9488_PHYS_WIDTH;
-static int display_height = ILI9488_PHYS_HEIGHT;
+static int display_width = ILI9488_PHYS_WIDTH;   // Logical width
+static int display_height = ILI9488_PHYS_HEIGHT; // Logical height
 
-// Helper: Send command (polling mode for control commands)
+// Helper: Send command
 static void ili9488_write_cmd(uint8_t cmd) {
     gpio_set_level(dc_pin, 0);
     spi_transaction_t t = {
         .length = 8,
         .tx_buffer = &cmd,
         .flags = 0,
+        .cmd = 0,
+        .addr = 0,
+        .user = NULL,
+        .rx_buffer = NULL
     };
     spi_device_polling_transmit(spi_device, &t);
 }
 
-// Helper: Send data (polling mode for small control data)
+// Helper: Send data
 static void ili9488_write_data(uint8_t *data, size_t len) {
     if (len == 0) return;
     gpio_set_level(dc_pin, 1);
@@ -74,25 +74,12 @@ static void ili9488_write_data(uint8_t *data, size_t len) {
         .length = len * 8,
         .tx_buffer = data,
         .flags = 0,
+        .cmd = 0,
+        .addr = 0,
+        .user = NULL,
+        .rx_buffer = NULL
     };
     spi_device_polling_transmit(spi_device, &t);
-}
-
-// Helper: Send large data using DMA (data must be in DMA-capable memory)
-static void ili9488_write_data_dma(const uint8_t *data, size_t len) {
-    if (len == 0) return;
-    
-    gpio_set_level(dc_pin, 1);
-    
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = len * 8;
-    t.tx_buffer = data;
-    
-    esp_err_t ret = spi_device_transmit(spi_device, &t);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DMA transfer failed: %d", ret);
-    }
 }
 
 // Helper: Set address window
@@ -128,22 +115,31 @@ static inline void set_pixel_fb(int x, int y, uint32_t color) {
 
 // Helper: Get MADCTL value for orientation
 static uint8_t get_madctl_for_orientation(uint8_t orientation) {
-    uint8_t madctl = MADCTL_BGR;
+    uint8_t madctl = MADCTL_BGR;  // Base setting with BGR color order
     
     switch (orientation) {
         case ORIENTATION_PORTRAIT:
+            // 0 degrees: 320x480
             madctl |= MADCTL_MX;
             break;
+            
         case ORIENTATION_LANDSCAPE:
+            // 90 degrees clockwise: 480x320
             madctl |= MADCTL_MV;
             break;
+            
         case ORIENTATION_PORTRAIT_INV:
+            // 180 degrees: 320x480
             madctl |= MADCTL_MY;
             break;
+            
         case ORIENTATION_LANDSCAPE_INV:
+            // 270 degrees clockwise (90 counter-clockwise): 480x320
             madctl |= MADCTL_MX | MADCTL_MY | MADCTL_MV;
             break;
+            
         default:
+            // Default to portrait
             madctl |= MADCTL_MX;
             break;
     }
@@ -161,6 +157,7 @@ static mp_obj_t ili9488_init(size_t n_args, const mp_obj_t *args) {
     rst_pin = mp_obj_get_int(args[2]);
     int cs_pin = mp_obj_get_int(args[3]);
     
+    // Optional orientation parameter (default to portrait)
     if (n_args >= 5) {
         current_orientation = mp_obj_get_int(args[4]);
         if (current_orientation > ORIENTATION_LANDSCAPE_INV) {
@@ -173,11 +170,11 @@ static mp_obj_t ili9488_init(size_t n_args, const mp_obj_t *args) {
     // Set logical display dimensions based on orientation
     if (current_orientation == ORIENTATION_LANDSCAPE || 
         current_orientation == ORIENTATION_LANDSCAPE_INV) {
-        display_width = ILI9488_PHYS_HEIGHT;
-        display_height = ILI9488_PHYS_WIDTH;
+        display_width = ILI9488_PHYS_HEIGHT;   // 480
+        display_height = ILI9488_PHYS_WIDTH;   // 320
     } else {
-        display_width = ILI9488_PHYS_WIDTH;
-        display_height = ILI9488_PHYS_HEIGHT;
+        display_width = ILI9488_PHYS_WIDTH;    // 320
+        display_height = ILI9488_PHYS_HEIGHT;  // 480
     }
 
     mp_printf(&mp_plat_print, "ILI9488: SPI=%d DC=%d RST=%d CS=%d Orientation=%d (%dx%d)\n", 
@@ -194,18 +191,16 @@ static mp_obj_t ili9488_init(size_t n_args, const mp_obj_t *args) {
     gpio_set_level(rst_pin, 1);
     mp_hal_delay_ms(120);
 
-    // Configure SPI device - note: assumes SPI bus already initialized with DMA
-    // The SPI bus should be initialized in your main code with spi_bus_initialize()
+    // Configure SPI with larger max_transfer_sz
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = 40000000,
         .mode = 0,
         .spics_io_num = cs_pin,
         .queue_size = 7,
-        .flags = 0,
+        .flags = SPI_DEVICE_NO_DUMMY,
         .pre_cb = NULL,
         .post_cb = NULL
     };
-    
     esp_err_t ret = spi_bus_add_device(spi_host, &devcfg, &spi_device);
     if (ret != ESP_OK) {
         mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("Failed to add SPI device"));
@@ -220,10 +215,10 @@ static mp_obj_t ili9488_init(size_t n_args, const mp_obj_t *args) {
 
     // Set color format to 18-bit (6-6-6 RGB)
     ili9488_write_cmd(ILI9488_PIXFMT);
-    uint8_t pixfmt = 0x66;
+    uint8_t pixfmt = 0x66; // 18-bit color (6-6-6 RGB)
     ili9488_write_data(&pixfmt, 1);
 
-    // Configure MADCTL with selected orientation
+    // Configure MADCTL (Memory Access Control) with selected orientation
     uint8_t madctl = get_madctl_for_orientation(current_orientation);
     ili9488_write_cmd(ILI9488_MADCTL);
     ili9488_write_data(&madctl, 1);
@@ -232,32 +227,19 @@ static mp_obj_t ili9488_init(size_t n_args, const mp_obj_t *args) {
     ili9488_write_cmd(ILI9488_DISPON);
     mp_hal_delay_ms(100);
 
-    // Allocate framebuffer in PSRAM
+    // Allocate framebuffer in PSRAM (3 bytes per pixel for RGB888)
+    // Framebuffer size is based on logical dimensions
     if (framebuffer == NULL) {
         framebuffer = heap_caps_malloc(display_width * display_height * 3, 
                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (framebuffer == NULL) {
             mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("Failed to allocate framebuffer"));
         }
-        // Initialize to black
-        memset(framebuffer, 0, display_width * display_height * 3);
         mp_printf(&mp_plat_print, "ILI9488: Framebuffer allocated in PSRAM (%d bytes)\n",
                   display_width * display_height * 3);
     }
-    
-    // Allocate DMA bounce buffer in internal SRAM
-    if (dma_buffer == NULL) {
-        dma_buffer = heap_caps_malloc(DMA_BUFFER_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (dma_buffer == NULL) {
-            heap_caps_free(framebuffer);
-            framebuffer = NULL;
-            mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("Failed to allocate DMA buffer"));
-        }
-        mp_printf(&mp_plat_print, "ILI9488: DMA bounce buffer allocated in internal SRAM (%d bytes)\n",
-                  DMA_BUFFER_SIZE);
-    }
 
-    mp_printf(&mp_plat_print, "ILI9488: Init complete with DMA support\n");
+    mp_printf(&mp_plat_print, "ILI9488: Init complete\n");
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_init_obj, 4, 5, ili9488_init);
@@ -266,6 +248,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_init_obj, 4, 5, ili9488_init)
 static mp_obj_t ili9488_deinit(void) {
     mp_printf(&mp_plat_print, "ILI9488: Deinitializing...\n");
     
+    // Remove SPI device
     if (spi_device != NULL) {
         esp_err_t ret = spi_bus_remove_device(spi_device);
         if (ret == ESP_OK) {
@@ -276,18 +259,14 @@ static mp_obj_t ili9488_deinit(void) {
         spi_device = NULL;
     }
     
+    // Free framebuffer
     if (framebuffer != NULL) {
         heap_caps_free(framebuffer);
         framebuffer = NULL;
         mp_printf(&mp_plat_print, "ILI9488: Framebuffer freed\n");
     }
     
-    if (dma_buffer != NULL) {
-        heap_caps_free(dma_buffer);
-        dma_buffer = NULL;
-        mp_printf(&mp_plat_print, "ILI9488: DMA buffer freed\n");
-    }
-    
+    // Reset dimensions to default
     display_width = ILI9488_PHYS_WIDTH;
     display_height = ILI9488_PHYS_HEIGHT;
     current_orientation = ORIENTATION_PORTRAIT;
@@ -308,25 +287,29 @@ static mp_obj_t ili9488_get_height(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_get_height_obj, ili9488_get_height);
 
+// Get current orientation
 static mp_obj_t ili9488_get_orientation(void) {
     return mp_obj_new_int(current_orientation);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_get_orientation_obj, ili9488_get_orientation);
 
+// Set line thickness
 static mp_obj_t ili9488_set_line_thickness(mp_obj_t thickness_obj) {
     int thickness = mp_obj_get_int(thickness_obj);
     if (thickness < 1) thickness = 1;
-    if (thickness > 20) thickness = 20;
+    if (thickness > 20) thickness = 20;  // Reasonable maximum
     line_thickness = thickness;
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(ili9488_set_line_thickness_obj, ili9488_set_line_thickness);
 
+// Get line thickness
 static mp_obj_t ili9488_get_line_thickness(void) {
     return mp_obj_new_int(line_thickness);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_get_line_thickness_obj, ili9488_get_line_thickness);
 
+// Memory info
 static mp_obj_t ili9488_mem_info(void) {
     size_t spiram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -341,16 +324,16 @@ static mp_obj_t ili9488_mem_info(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_mem_info_obj, ili9488_mem_info);
 
-// Partial update - optimized with DMA for larger regions
+// Partial update - only update a rectangular region
 static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
-    if (!framebuffer || !spi_device || !dma_buffer) return mp_const_none;
+    if (!framebuffer || !spi_device) return mp_const_none;
 
     int x = mp_obj_get_int(args[0]);
     int y = mp_obj_get_int(args[1]);
     int w = mp_obj_get_int(args[2]);
     int h = mp_obj_get_int(args[3]);
 
-    // Clamp to screen bounds
+    // Clamp to screen bounds (logical coordinates)
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > display_width) w = display_width - x;
@@ -360,55 +343,17 @@ static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
 
     ili9488_set_window(x, y, x + w - 1, y + h - 1);
 
-    size_t row_bytes = w * 3;
-    
-    // For small updates, use direct polling transfer
-    if (row_bytes <= 512 || h <= 4) {
-        for (int row = 0; row < h; row++) {
-            int fb_offset = ((y + row) * display_width + x) * 3;
-            ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
-        }
-        return mp_const_none;
-    }
-    
-    // For larger updates, use DMA with bounce buffer
-    gpio_set_level(dc_pin, 1);  // Set DC high for data once
-    
+    // Send only the affected region
     for (int row = 0; row < h; row++) {
         int fb_offset = ((y + row) * display_width + x) * 3;
-        
-        if (row_bytes <= DMA_BUFFER_SIZE) {
-            // Copy row to DMA buffer and send
-            memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
-            
-            spi_transaction_t t;
-            memset(&t, 0, sizeof(t));
-            t.length = row_bytes * 8;
-            t.tx_buffer = dma_buffer;
-            spi_device_transmit(spi_device, &t);
-        } else {
-            // Row too large, send in chunks
-            size_t offset = 0;
-            while (offset < row_bytes) {
-                size_t chunk = (row_bytes - offset > DMA_BUFFER_SIZE) ? 
-                              DMA_BUFFER_SIZE : (row_bytes - offset);
-                memcpy(dma_buffer, framebuffer + fb_offset + offset, chunk);
-                
-                spi_transaction_t t;
-                memset(&t, 0, sizeof(t));
-                t.length = chunk * 8;
-                t.tx_buffer = dma_buffer;
-                spi_device_transmit(spi_device, &t);
-                
-                offset += chunk;
-            }
-        }
+        ili9488_write_data((uint8_t *)framebuffer + fb_offset, w * 3);
     }
 
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_update_region_obj, 4, 4, ili9488_update_region);
 
+// Fill screen
 static mp_obj_t ili9488_fill(mp_obj_t color_obj) {
     uint32_t color = mp_obj_get_int(color_obj);
 
@@ -428,6 +373,7 @@ static mp_obj_t ili9488_fill(mp_obj_t color_obj) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(ili9488_fill_obj, ili9488_fill);
 
+// Set pixel
 static mp_obj_t ili9488_pixel(size_t n_args, const mp_obj_t *args) {
     int x = mp_obj_get_int(args[0]);
     int y = mp_obj_get_int(args[1]);
@@ -448,6 +394,7 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
     uint32_t color = mp_obj_get_int(args[4]);
 
     if (line_thickness == 1) {
+        // Fast path for single pixel line
         int dx = abs(x1 - x0);
         int dy = abs(y1 - y0);
         int sx = x0 < x1 ? 1 : -1;
@@ -456,20 +403,29 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
 
         while (1) {
             set_pixel_fb(x0, y0, color);
+
             if (x0 == x1 && y0 == y1) break;
+
             int e2 = 2 * err;
-            if (e2 > -dy) { err -= dy; x0 += sx; }
-            if (e2 < dx) { err += dx; y0 += sy; }
+            if (e2 > -dy) {
+                err -= dy;
+                x0 += sx;
+            }
+            if (e2 < dx) {
+                err += dx;
+                y0 += sy;
+            }
         }
         return mp_const_none;
     }
     
-    // Thick line implementation
+    // Thick line implementation with scanline fill
     int dx = x1 - x0;
     int dy = y1 - y0;
     float length = sqrt(dx * dx + dy * dy);
     
     if (length < 0.1f) {
+        // Zero-length line - draw filled circle
         int radius = line_thickness / 2;
         for (int j = -radius; j <= radius; j++) {
             for (int i = -radius; i <= radius; i++) {
@@ -481,10 +437,13 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
         return mp_const_none;
     }
     
+    // Check if line is perfectly horizontal or vertical (fast paths)
     if (dy == 0) {
+        // Horizontal line - very fast
         int min_x = x0 < x1 ? x0 : x1;
         int max_x = x0 < x1 ? x1 : x0;
         int half_thick = line_thickness / 2;
+        
         for (int y = y0 - half_thick; y <= y0 + half_thick; y++) {
             for (int x = min_x; x <= max_x; x++) {
                 set_pixel_fb(x, y, color);
@@ -494,9 +453,11 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
     }
     
     if (dx == 0) {
+        // Vertical line - very fast
         int min_y = y0 < y1 ? y0 : y1;
         int max_y = y0 < y1 ? y1 : y0;
         int half_thick = line_thickness / 2;
+        
         for (int x = x0 - half_thick; x <= x0 + half_thick; x++) {
             for (int y = min_y; y <= max_y; y++) {
                 set_pixel_fb(x, y, color);
@@ -505,10 +466,14 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
         return mp_const_none;
     }
     
+    // Angled thick line with scanline fill
+    // Calculate perpendicular unit vector
     float perp_x = -dy / length;
     float perp_y = dx / length;
+    
     float half_thick = line_thickness / 2.0f;
     
+    // Calculate the 4 corners of the thick line rectangle
     float c1x = x0 + perp_x * half_thick;
     float c1y = y0 + perp_y * half_thick;
     float c2x = x0 - perp_x * half_thick;
@@ -518,39 +483,53 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
     float c4x = x1 + perp_x * half_thick;
     float c4y = y1 + perp_y * half_thick;
     
+    // Find bounding box for scanline algorithm
     int min_y = (int)c1y;
     int max_y = (int)c1y;
+    
     if ((int)c2y < min_y) min_y = (int)c2y;
     if ((int)c3y < min_y) min_y = (int)c3y;
     if ((int)c4y < min_y) min_y = (int)c4y;
+    
     if ((int)c2y > max_y) max_y = (int)c2y;
     if ((int)c3y > max_y) max_y = (int)c3y;
     if ((int)c4y > max_y) max_y = (int)c4y;
+    
+    // Add padding for rounding
     min_y -= 1;
     max_y += 1;
     
+    // Scanline fill algorithm
     for (int scan_y = min_y; scan_y <= max_y; scan_y++) {
+        // Find intersections with the 4 edges of the rectangle
         int intersections[4];
         int num_intersections = 0;
         
+        // Edge 1: c1 to c2
         if ((c1y <= scan_y && scan_y <= c2y) || (c2y <= scan_y && scan_y <= c1y)) {
             if (fabs(c2y - c1y) > 0.01f) {
                 float t = (scan_y - c1y) / (c2y - c1y);
                 intersections[num_intersections++] = (int)(c1x + t * (c2x - c1x));
             }
         }
+        
+        // Edge 2: c2 to c3
         if ((c2y <= scan_y && scan_y <= c3y) || (c3y <= scan_y && scan_y <= c2y)) {
             if (fabs(c3y - c2y) > 0.01f) {
                 float t = (scan_y - c2y) / (c3y - c2y);
                 intersections[num_intersections++] = (int)(c2x + t * (c3x - c2x));
             }
         }
+        
+        // Edge 3: c3 to c4
         if ((c3y <= scan_y && scan_y <= c4y) || (c4y <= scan_y && scan_y <= c3y)) {
             if (fabs(c4y - c3y) > 0.01f) {
                 float t = (scan_y - c3y) / (c4y - c3y);
                 intersections[num_intersections++] = (int)(c3x + t * (c4x - c3x));
             }
         }
+        
+        // Edge 4: c4 to c1
         if ((c4y <= scan_y && scan_y <= c1y) || (c1y <= scan_y && scan_y <= c4y)) {
             if (fabs(c1y - c4y) > 0.01f) {
                 float t = (scan_y - c4y) / (c1y - c4y);
@@ -558,6 +537,7 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
             }
         }
         
+        // Sort intersections (simple bubble sort for small arrays)
         for (int i = 0; i < num_intersections - 1; i++) {
             for (int j = 0; j < num_intersections - i - 1; j++) {
                 if (intersections[j] > intersections[j + 1]) {
@@ -568,20 +548,33 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
             }
         }
         
+        // Fill between pairs of intersections
         if (num_intersections >= 2) {
             int min_x = intersections[0];
             int max_x = intersections[num_intersections - 1];
+            
             for (int x = min_x; x <= max_x; x++) {
                 set_pixel_fb(x, scan_y, color);
             }
         }
     }
     
+    // Add rounded endcaps for smooth appearance
     int radius = line_thickness / 2;
+    
+    // Start cap
     for (int j = -radius; j <= radius; j++) {
         for (int i = -radius; i <= radius; i++) {
             if (i*i + j*j <= radius*radius) {
                 set_pixel_fb(x0 + i, y0 + j, color);
+            }
+        }
+    }
+    
+    // End cap
+    for (int j = -radius; j <= radius; j++) {
+        for (int i = -radius; i <= radius; i++) {
+            if (i*i + j*j <= radius*radius) {
                 set_pixel_fb(x1 + i, y1 + j, color);
             }
         }
@@ -591,6 +584,7 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_line_obj, 5, 5, ili9488_line);
 
+// Draw rectangle (outline only or filled)
 static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
     int x = mp_obj_get_int(args[0]);
     int y = mp_obj_get_int(args[1]);
@@ -601,6 +595,7 @@ static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
 
     if (!framebuffer) return mp_const_none;
 
+    // Fill if fill_color is provided
     if (fill_color != COLOR_NONE) {
         for (int j = 0; j < h; j++) {
             for (int i = 0; i < w; i++) {
@@ -609,6 +604,7 @@ static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
         }
     }
 
+    // Draw outline
     for (int i = 0; i < w; i++) {
         set_pixel_fb(x + i, y, color);
         set_pixel_fb(x + i, y + h - 1, color);
@@ -622,6 +618,7 @@ static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_rect_obj, 5, 6, ili9488_rect);
 
+// Draw circle (Midpoint circle algorithm, outline or filled)
 static mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
     int x0 = mp_obj_get_int(args[0]);
     int y0 = mp_obj_get_int(args[1]);
@@ -631,6 +628,7 @@ static mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
 
     if (!framebuffer) return mp_const_none;
 
+    // Fill if fill_color is provided
     if (fill_color != COLOR_NONE) {
         for (int y = -r; y <= r; y++) {
             for (int x = -r; x <= r; x++) {
@@ -641,6 +639,7 @@ static mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
         }
     }
 
+    // Draw outline using midpoint algorithm
     int x = r;
     int y = 0;
     int err = 0;
@@ -669,6 +668,7 @@ static mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_circle_obj, 4, 5, ili9488_circle);
 
+// Draw triangle (outline or filled)
 static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args) {
     int x0 = mp_obj_get_int(args[0]);
     int y0 = mp_obj_get_int(args[1]);
@@ -681,35 +681,47 @@ static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args) {
 
     if (!framebuffer) return mp_const_none;
 
+    // Fill triangle if fill_color is provided
     if (fill_color != COLOR_NONE) {
+        // Sort vertices by y coordinate (y0 <= y1 <= y2)
         if (y0 > y1) { int t; t = y0; y0 = y1; y1 = t; t = x0; x0 = x1; x1 = t; }
         if (y1 > y2) { int t; t = y1; y1 = y2; y2 = t; t = x1; x1 = x2; x2 = t; }
         if (y0 > y1) { int t; t = y0; y0 = y1; y1 = t; t = x0; x0 = x1; x1 = t; }
 
+        // Scanline fill
         for (int y = y0; y <= y2; y++) {
             int xa, xb;
+            
             if (y < y1) {
+                // Top half
                 xa = x0 + (y - y0) * (x1 - x0) / (y1 - y0 + 1);
                 xb = x0 + (y - y0) * (x2 - x0) / (y2 - y0 + 1);
             } else {
+                // Bottom half
                 xa = x1 + (y - y1) * (x2 - x1) / (y2 - y1 + 1);
                 xb = x0 + (y - y0) * (x2 - x0) / (y2 - y0 + 1);
             }
+            
             if (xa > xb) { int t = xa; xa = xb; xb = t; }
+            
             for (int x = xa; x <= xb; x++) {
                 set_pixel_fb(x, y, fill_color);
             }
         }
     }
 
+    // Draw outline
     mp_obj_t line_args[5];
-    line_args[4] = args[6];
+    line_args[4] = args[6]; // color
+
     line_args[0] = args[0]; line_args[1] = args[1];
     line_args[2] = args[2]; line_args[3] = args[3];
     ili9488_line(5, line_args);
+
     line_args[0] = args[2]; line_args[1] = args[3];
     line_args[2] = args[4]; line_args[3] = args[5];
     ili9488_line(5, line_args);
+
     line_args[0] = args[4]; line_args[1] = args[5];
     line_args[2] = args[0]; line_args[3] = args[1];
     ili9488_line(5, line_args);
@@ -718,22 +730,24 @@ static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_triangle_obj, 7, 8, ili9488_triangle);
 
+// Sprite structure with dirty rectangle tracking
 typedef struct {
     mp_obj_base_t base;
-    uint8_t *pixels;
-    uint8_t *background;
+    uint8_t *pixels;      // RGB888 format (3 bytes per pixel)
+    uint8_t *background;  // RGB888 format (3 bytes per pixel)
     int width;
     int height;
     int x;
     int y;
-    int old_x;
+    int old_x;            // Previous position for dirty rect
     int old_y;
     bool visible;
-    bool moved;
+    bool moved;           // Track if sprite moved
 } sprite_obj_t;
 
 const mp_obj_type_t sprite_type;
 
+// Create sprite
 static mp_obj_t sprite_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     (void)type;
     mp_arg_check_num(n_args, n_kw, 2, 2, false);
@@ -757,6 +771,7 @@ static mp_obj_t sprite_make_new(const mp_obj_type_t *type, size_t n_args, size_t
     return MP_OBJ_FROM_PTR(self);
 }
 
+// Set sprite pixel
 static mp_obj_t sprite_set_pixel(size_t n_args, const mp_obj_t *args) {
     sprite_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     int x = mp_obj_get_int(args[1]);
@@ -774,6 +789,7 @@ static mp_obj_t sprite_set_pixel(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(sprite_set_pixel_obj, 4, 4, sprite_set_pixel);
 
+// Draw sprite with dirty rectangle tracking
 static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
     sprite_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     int new_x = mp_obj_get_int(args[1]);
@@ -783,7 +799,20 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
     if (!framebuffer) return mp_const_none;
 
     bool sprite_moved = self->visible && (self->x != new_x || self->y != new_y);
+    bool positions_overlap = false;
+    
+    // Check if old and new positions overlap
+    if (sprite_moved) {
+        int old_right = self->x + self->width;
+        int old_bottom = self->y + self->height;
+        int new_right = new_x + self->width;
+        int new_bottom = new_y + self->height;
+        
+        positions_overlap = !(new_x >= old_right || new_right <= self->x ||
+                             new_y >= old_bottom || new_bottom <= self->y);
+    }
 
+    // Step 1: If sprite was visible, restore its old background
     if (self->visible) {
         for (int j = 0; j < self->height; j++) {
             for (int i = 0; i < self->width; i++) {
@@ -800,6 +829,7 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
         }
     }
 
+    // Step 2: NOW save clean background at new position (sprite is erased)
     for (int j = 0; j < self->height; j++) {
         for (int i = 0; i < self->width; i++) {
             int px = new_x + i;
@@ -814,6 +844,7 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
         }
     }
 
+    // Step 3: Draw sprite at new position (skip black/transparent pixels: 0x000000)
     for (int j = 0; j < self->height; j++) {
         for (int i = 0; i < self->width; i++) {
             int px = new_x + i;
@@ -824,6 +855,7 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
             uint8_t g = self->pixels[sp_offset + 1];
             uint8_t b = self->pixels[sp_offset + 2];
 
+            // Skip if color is black (transparent)
             if ((r != 0 || g != 0 || b != 0) && 
                 px >= 0 && px < display_width && py >= 0 && py < display_height) {
                 int fb_offset = (py * display_width + px) * 3;
@@ -834,8 +866,10 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
         }
     }
 
-    if (auto_update && spi_device && dma_buffer) {
+    // Step 4: Update display if auto_update is enabled
+    if (auto_update && spi_device) {
         if (sprite_moved) {
+            // Calculate union of old and new rectangles
             int min_x = (self->x < new_x) ? self->x : new_x;
             int min_y = (self->y < new_y) ? self->y : new_y;
             int max_x = ((self->x + self->width) > (new_x + self->width)) ? 
@@ -846,34 +880,23 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
             int update_w = max_x - min_x;
             int update_h = max_y - min_y;
             
+            // Clamp to screen bounds
             if (min_x < 0) { update_w += min_x; min_x = 0; }
             if (min_y < 0) { update_h += min_y; min_y = 0; }
             if (min_x + update_w > display_width) update_w = display_width - min_x;
             if (min_y + update_h > display_height) update_h = display_height - min_y;
             
             if (update_w > 0 && update_h > 0) {
+                // Update the combined region
                 ili9488_set_window(min_x, min_y, min_x + update_w - 1, min_y + update_h - 1);
-                
-                gpio_set_level(dc_pin, 1);
-                size_t row_bytes = update_w * 3;
                 
                 for (int row = 0; row < update_h; row++) {
                     int fb_offset = ((min_y + row) * display_width + min_x) * 3;
-                    
-                    if (row_bytes <= DMA_BUFFER_SIZE) {
-                        memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
-                        
-                        spi_transaction_t t;
-                        memset(&t, 0, sizeof(t));
-                        t.length = row_bytes * 8;
-                        t.tx_buffer = dma_buffer;
-                        spi_device_transmit(spi_device, &t);
-                    } else {
-                        ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
-                    }
+                    ili9488_write_data((uint8_t *)framebuffer + fb_offset, update_w * 3);
                 }
             }
         } else {
+            // First draw or no movement - just update sprite region
             if (new_x >= 0 && new_y >= 0 && 
                 new_x + self->width <= display_width && 
                 new_y + self->height <= display_height) {
@@ -881,28 +904,15 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
                                   new_x + self->width - 1, 
                                   new_y + self->height - 1);
                 
-                gpio_set_level(dc_pin, 1);
-                size_t row_bytes = self->width * 3;
-                
                 for (int row = 0; row < self->height; row++) {
                     int fb_offset = ((new_y + row) * display_width + new_x) * 3;
-                    
-                    if (row_bytes <= DMA_BUFFER_SIZE) {
-                        memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
-                        
-                        spi_transaction_t t;
-                        memset(&t, 0, sizeof(t));
-                        t.length = row_bytes * 8;
-                        t.tx_buffer = dma_buffer;
-                        spi_device_transmit(spi_device, &t);
-                    } else {
-                        ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
-                    }
+                    ili9488_write_data((uint8_t *)framebuffer + fb_offset, self->width * 3);
                 }
             }
         }
     }
 
+    // Update sprite state
     self->old_x = self->x;
     self->old_y = self->y;
     self->x = new_x;
@@ -914,6 +924,7 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(sprite_draw_obj, 3, 4, sprite_draw);
 
+// Hide sprite
 static mp_obj_t sprite_hide(mp_obj_t self_in) {
     sprite_obj_t *self = MP_OBJ_TO_PTR(self_in);
 
@@ -939,6 +950,7 @@ static mp_obj_t sprite_hide(mp_obj_t self_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(sprite_hide_obj, sprite_hide);
 
+// Sprite locals dict
 static const mp_rom_map_elem_t sprite_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_set_pixel), MP_ROM_PTR(&sprite_set_pixel_obj) },
     { MP_ROM_QSTR(MP_QSTR_draw), MP_ROM_PTR(&sprite_draw_obj) },
@@ -946,6 +958,7 @@ static const mp_rom_map_elem_t sprite_locals_dict_table[] = {
 };
 static MP_DEFINE_CONST_DICT(sprite_locals_dict, sprite_locals_dict_table);
 
+// Sprite type definition
 MP_DEFINE_CONST_OBJ_TYPE(
     sprite_type,
     MP_QSTR_Sprite,
@@ -954,56 +967,31 @@ MP_DEFINE_CONST_OBJ_TYPE(
     locals_dict, &sprite_locals_dict
 );
 
-// Update display using DMA with bounce buffer
+// Update display
 static mp_obj_t ili9488_show(void) {
-    if (!framebuffer || !spi_device || !dma_buffer) {
-        mp_printf(&mp_plat_print, "ILI9488: Cannot show - missing resources\n");
-        return mp_const_none;
-    }
+    if (!framebuffer || !spi_device) return mp_const_none;
 
     ili9488_set_window(0, 0, display_width - 1, display_height - 1);
 
+    // Use smaller chunk size to avoid SPI transaction limit (typically 4092 bytes)
+    const size_t chunk_size = 4092;  // Just under 4KB to be safe
     size_t total_bytes = display_width * display_height * 3;
-    size_t chunks_sent = 0;
 
-    mp_printf(&mp_plat_print, "ILI9488: Updating display with DMA (%d bytes, %d chunks)...\n", 
-              total_bytes, (total_bytes + DMA_BUFFER_SIZE - 1) / DMA_BUFFER_SIZE);
+    mp_printf(&mp_plat_print, "ILI9488: Updating display (%d bytes)...\n", total_bytes);
 
-    // Set DC high once for all data transfers
-    gpio_set_level(dc_pin, 1);
-    
-    // Transfer framebuffer using DMA bounce buffer
-    size_t offset = 0;
-    while (offset < total_bytes) {
-        size_t chunk_size = (total_bytes - offset > DMA_BUFFER_SIZE) ? 
-                           DMA_BUFFER_SIZE : (total_bytes - offset);
-        
-        // Copy chunk from PSRAM framebuffer to DMA buffer
-        memcpy(dma_buffer, framebuffer + offset, chunk_size);
-        
-        // Transfer via DMA
-        spi_transaction_t t;
-        memset(&t, 0, sizeof(t));
-        t.length = chunk_size * 8;  // Length in bits
-        t.tx_buffer = dma_buffer;
-        
-        esp_err_t ret = spi_device_transmit(spi_device, &t);
-        if (ret != ESP_OK) {
-            mp_printf(&mp_plat_print, "ILI9488: DMA transfer failed at offset %d/%d: %d\n", 
-                     offset, total_bytes, ret);
-            return mp_const_none;
-        }
-        
-        offset += chunk_size;
-        chunks_sent++;
+    for (size_t offset = 0; offset < total_bytes; offset += chunk_size) {
+        size_t len = (offset + chunk_size > total_bytes) ?
+                     (total_bytes - offset) : chunk_size;
+        ili9488_write_data((uint8_t *)framebuffer + offset, len);
     }
 
-    mp_printf(&mp_plat_print, "ILI9488: Display updated successfully (%d chunks)\n", chunks_sent);
+    mp_printf(&mp_plat_print, "ILI9488: Display updated\n");
 
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_show_obj, ili9488_show);
 
+// Module globals
 static const mp_rom_map_elem_t ili9488_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_ili9488) },
     { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&ili9488_init_obj) },
@@ -1039,4 +1027,3 @@ const mp_obj_module_t ili9488_module = {
 };
 
 MP_REGISTER_MODULE(MP_QSTR_ili9488, ili9488_module);
-

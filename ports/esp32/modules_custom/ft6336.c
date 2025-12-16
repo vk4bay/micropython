@@ -516,32 +516,70 @@ static mp_obj_t ft6336_get_touches(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ft6336_get_touches_obj, ft6336_get_touches);
 
+// Helper function to read current touch without updating swipe tracking
+static bool read_touch_internal(int *out_x, int *out_y) {
+    if (!initialized) {
+        return false;
+    }
+    
+    // Read number of touches
+    uint8_t num_touches = 0;
+    esp_err_t ret = ft6336_read_reg(FT6336_REG_NUM_TOUCHES, &num_touches);
+    
+    if (ret != ESP_OK || num_touches == 0 || num_touches > 2) {
+        return false;
+    }
+    
+    // Read touch coordinates
+    uint8_t xh = 0, xl = 0, yh = 0, yl = 0;
+    
+    if (ft6336_read_reg(FT6336_REG_TOUCH1_XH, &xh) != ESP_OK ||
+        ft6336_read_reg(FT6336_REG_TOUCH1_XL, &xl) != ESP_OK ||
+        ft6336_read_reg(FT6336_REG_TOUCH1_YH, &yh) != ESP_OK ||
+        ft6336_read_reg(FT6336_REG_TOUCH1_YL, &yl) != ESP_OK) {
+        return false;
+    }
+    
+    // Combine bytes to get raw physical coordinates
+    int raw_x = ((xh & 0x0F) << 8) | xl;
+    int raw_y = ((yh & 0x0F) << 8) | yl;
+    
+    // Transform coordinates based on orientation
+    transform_touch_coordinates(raw_x, raw_y, out_x, out_y);
+    
+    return true;
+}
+
 // Detect swipe from left edge
 static mp_obj_t ft6336_swipe_from_left(void) {
-    if (!initialized || !swipe_tracking) {
+    if (!initialized) {
         return mp_const_false;
     }
     
-    // Read current touch position
-    mp_obj_t touch_data = ft6336_read_touch();
-    mp_obj_t *items;
-    mp_obj_get_array_fixed_n(touch_data, 3, &items);
-    
-    bool touched = mp_obj_is_true(items[0]);
+    int current_x, current_y;
+    bool touched = read_touch_internal(&current_x, &current_y);
     
     if (!touched) {
         // Touch released - check if it was a valid swipe from left edge
-        bool was_swipe = (swipe_start_x <= EDGE_THRESHOLD && 
-                         swipe_tracking);
+        if (swipe_tracking && swipe_start_x <= EDGE_THRESHOLD) {
+            swipe_tracking = false;
+            return mp_const_true;
+        }
         swipe_tracking = false;
-        return mp_obj_new_bool(was_swipe);
+        return mp_const_false;
     }
     
-    int current_x = mp_obj_get_int(items[1]);
+    // Start tracking on new touch
+    if (!swipe_tracking) {
+        swipe_start_x = current_x;
+        swipe_start_y = current_y;
+        swipe_tracking = true;
+    }
     
     // Check if swipe started from left edge and moved right
     if (swipe_start_x <= EDGE_THRESHOLD && 
         (current_x - swipe_start_x) >= SWIPE_THRESHOLD) {
+        swipe_tracking = false;  // Reset for next swipe
         return mp_const_true;
     }
     
@@ -551,30 +589,34 @@ static MP_DEFINE_CONST_FUN_OBJ_0(ft6336_swipe_from_left_obj, ft6336_swipe_from_l
 
 // Detect swipe from right edge
 static mp_obj_t ft6336_swipe_from_right(void) {
-    if (!initialized || !swipe_tracking) {
+    if (!initialized) {
         return mp_const_false;
     }
     
-    // Read current touch position
-    mp_obj_t touch_data = ft6336_read_touch();
-    mp_obj_t *items;
-    mp_obj_get_array_fixed_n(touch_data, 3, &items);
-    
-    bool touched = mp_obj_is_true(items[0]);
+    int current_x, current_y;
+    bool touched = read_touch_internal(&current_x, &current_y);
     
     if (!touched) {
         // Touch released - check if it was a valid swipe from right edge
-        bool was_swipe = (swipe_start_x >= (display_width - EDGE_THRESHOLD) && 
-                         swipe_tracking);
+        if (swipe_tracking && swipe_start_x >= (display_width - EDGE_THRESHOLD)) {
+            swipe_tracking = false;
+            return mp_const_true;
+        }
         swipe_tracking = false;
-        return mp_obj_new_bool(was_swipe);
+        return mp_const_false;
     }
     
-    int current_x = mp_obj_get_int(items[1]);
+    // Start tracking on new touch
+    if (!swipe_tracking) {
+        swipe_start_x = current_x;
+        swipe_start_y = current_y;
+        swipe_tracking = true;
+    }
     
     // Check if swipe started from right edge and moved left
     if (swipe_start_x >= (display_width - EDGE_THRESHOLD) && 
         (swipe_start_x - current_x) >= SWIPE_THRESHOLD) {
+        swipe_tracking = false;  // Reset for next swipe
         return mp_const_true;
     }
     
@@ -584,30 +626,34 @@ static MP_DEFINE_CONST_FUN_OBJ_0(ft6336_swipe_from_right_obj, ft6336_swipe_from_
 
 // Detect swipe from top edge
 static mp_obj_t ft6336_swipe_from_top(void) {
-    if (!initialized || !swipe_tracking) {
+    if (!initialized) {
         return mp_const_false;
     }
     
-    // Read current touch position
-    mp_obj_t touch_data = ft6336_read_touch();
-    mp_obj_t *items;
-    mp_obj_get_array_fixed_n(touch_data, 3, &items);
-    
-    bool touched = mp_obj_is_true(items[0]);
+    int current_x, current_y;
+    bool touched = read_touch_internal(&current_x, &current_y);
     
     if (!touched) {
         // Touch released - check if it was a valid swipe from top edge
-        bool was_swipe = (swipe_start_y <= EDGE_THRESHOLD && 
-                         swipe_tracking);
+        if (swipe_tracking && swipe_start_y <= EDGE_THRESHOLD) {
+            swipe_tracking = false;
+            return mp_const_true;
+        }
         swipe_tracking = false;
-        return mp_obj_new_bool(was_swipe);
+        return mp_const_false;
     }
     
-    int current_y = mp_obj_get_int(items[2]);
+    // Start tracking on new touch
+    if (!swipe_tracking) {
+        swipe_start_x = current_x;
+        swipe_start_y = current_y;
+        swipe_tracking = true;
+    }
     
     // Check if swipe started from top edge and moved down
     if (swipe_start_y <= EDGE_THRESHOLD && 
         (current_y - swipe_start_y) >= SWIPE_THRESHOLD) {
+        swipe_tracking = false;  // Reset for next swipe
         return mp_const_true;
     }
     
@@ -617,30 +663,34 @@ static MP_DEFINE_CONST_FUN_OBJ_0(ft6336_swipe_from_top_obj, ft6336_swipe_from_to
 
 // Detect swipe from bottom edge
 static mp_obj_t ft6336_swipe_from_bottom(void) {
-    if (!initialized || !swipe_tracking) {
+    if (!initialized) {
         return mp_const_false;
     }
     
-    // Read current touch position
-    mp_obj_t touch_data = ft6336_read_touch();
-    mp_obj_t *items;
-    mp_obj_get_array_fixed_n(touch_data, 3, &items);
-    
-    bool touched = mp_obj_is_true(items[0]);
+    int current_x, current_y;
+    bool touched = read_touch_internal(&current_x, &current_y);
     
     if (!touched) {
         // Touch released - check if it was a valid swipe from bottom edge
-        bool was_swipe = (swipe_start_y >= (display_height - EDGE_THRESHOLD) && 
-                         swipe_tracking);
+        if (swipe_tracking && swipe_start_y >= (display_height - EDGE_THRESHOLD)) {
+            swipe_tracking = false;
+            return mp_const_true;
+        }
         swipe_tracking = false;
-        return mp_obj_new_bool(was_swipe);
+        return mp_const_false;
     }
     
-    int current_y = mp_obj_get_int(items[2]);
+    // Start tracking on new touch
+    if (!swipe_tracking) {
+        swipe_start_x = current_x;
+        swipe_start_y = current_y;
+        swipe_tracking = true;
+    }
     
     // Check if swipe started from bottom edge and moved up
     if (swipe_start_y >= (display_height - EDGE_THRESHOLD) && 
         (swipe_start_y - current_y) >= SWIPE_THRESHOLD) {
+        swipe_tracking = false;  // Reset for next swipe
         return mp_const_true;
     }
     

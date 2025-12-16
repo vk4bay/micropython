@@ -109,7 +109,7 @@ class Writer:
         if margin < 0:
             if not self.row_clip:
                 self.device.scroll(0, margin)
-                self.device.fill_rect(0, y, self.screenwidth, abs(margin), self.bgcolor)
+                self.device.rect(0, y, self.screenwidth, abs(margin), self.bgcolor, self_bgcolor)
                 s.text_row += margin
 
     def set_clip(self, row_clip=None, col_clip=None, wrap=None):

@@ -16,7 +16,7 @@ class DisplayWriter:
             
     def fill_rect(self, x, y, w, h, color):
         """Fill rectangle - Writer may use this for efficiency"""
-        self.display.fill_rect(x, y, w, h, color)
+        self.display.rect(x, y, w, h, color, color)
         
     def show(self):
         """Update display"""
