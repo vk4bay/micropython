@@ -85,6 +85,32 @@ static void ili9488_write_data(uint8_t *data, size_t len) {
     spi_device_polling_transmit(spi_device, &t);
 }
 
+// Helper: Safe DMA transmit with retry logic
+// Returns ESP_OK on success, error code on failure after retries
+static esp_err_t safe_spi_transmit(spi_transaction_t *t) {
+    const int MAX_RETRIES = 3;
+    esp_err_t ret = ESP_OK;
+    int retry_delay_ms = 1;
+    
+    for (int retry = 0; retry < MAX_RETRIES; retry++) {
+        ret = spi_device_transmit(spi_device, t);
+        
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+        
+        // Log warning and retry with exponential backoff
+        ESP_LOGW(TAG, "DMA transfer failed (retry %d/%d): %d", retry + 1, MAX_RETRIES, ret);
+        
+        if (retry < MAX_RETRIES - 1) {
+            mp_hal_delay_ms(retry_delay_ms);
+            retry_delay_ms *= 2;  // Exponential backoff
+        }
+    }
+    
+    return ret;  // Return last error
+}
+
 // Helper: Send large data using DMA (data must be in DMA-capable memory)
 // DMA is faster for large transfers but requires internal SRAM buffer
 static void ili9488_write_data_dma(const uint8_t *data, size_t len) {
@@ -97,9 +123,9 @@ static void ili9488_write_data_dma(const uint8_t *data, size_t len) {
         .tx_buffer = data,
     };
     
-    esp_err_t ret = spi_device_transmit(spi_device, &t);
+    esp_err_t ret = safe_spi_transmit(&t);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "DMA transfer failed: %d", ret);
+        ESP_LOGE(TAG, "DMA transfer failed after retries: %d", ret);
     }
 }
 
@@ -409,7 +435,10 @@ static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
             if (accumulated > 0) {
                 t.length = accumulated * 8;
                 t.tx_buffer = dma_buffer;
-                spi_device_transmit(spi_device, &t);
+                esp_err_t ret = safe_spi_transmit(&t);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to update region at row %d", row);
+                }
                 accumulated = 0;
             }
             
@@ -428,7 +457,10 @@ static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
                     
                     t.length = chunk * 8;
                     t.tx_buffer = dma_buffer;
-                    spi_device_transmit(spi_device, &t);
+                    esp_err_t ret = safe_spi_transmit(&t);
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to update region chunk at row %d, offset %d", row, offset);
+                    }
                     
                     offset += chunk;
                 }
@@ -440,7 +472,10 @@ static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
     if (accumulated > 0) {
         t.length = accumulated * 8;
         t.tx_buffer = dma_buffer;
-        spi_device_transmit(spi_device, &t);
+        esp_err_t ret = safe_spi_transmit(&t);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to flush remaining data in update_region");
+        }
     }
 
     return mp_const_none;
@@ -1046,7 +1081,10 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
                         memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
                         t.length = row_bytes * 8;
                         t.tx_buffer = dma_buffer;
-                        spi_device_transmit(spi_device, &t);
+                        esp_err_t ret = safe_spi_transmit(&t);
+                        if (ret != ESP_OK) {
+                            ESP_LOGW(TAG, "Sprite update DMA failed at row %d", row);
+                        }
                     } else {
                         // Fallback for very wide sprites
                         ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
@@ -1073,7 +1111,10 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
                         memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
                         t.length = row_bytes * 8;
                         t.tx_buffer = dma_buffer;
-                        spi_device_transmit(spi_device, &t);
+                        esp_err_t ret = safe_spi_transmit(&t);
+                        if (ret != ESP_OK) {
+                            ESP_LOGW(TAG, "Sprite update DMA failed at row %d", row);
+                        }
                     } else {
                         ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
                     }
@@ -1160,8 +1201,6 @@ static mp_obj_t ili9488_show(void) {
     // Transfer framebuffer using DMA bounce buffer
     spi_transaction_t t = { 0 };
     size_t offset = 0;
-    int error_count = 0;
-    const int MAX_ERRORS = 10;  // Allow some errors before failing
     
     while (offset < total_bytes) {
         size_t chunk_size = (total_bytes - offset > DMA_BUFFER_SIZE) ? 
@@ -1170,25 +1209,15 @@ static mp_obj_t ili9488_show(void) {
         // Copy chunk from PSRAM framebuffer to DMA-capable internal SRAM buffer
         memcpy(dma_buffer, framebuffer + offset, chunk_size);
         
-        // Transfer via DMA
+        // Transfer via DMA with retry logic
         t.length = chunk_size * 8;  // Length in bits
         t.tx_buffer = dma_buffer;
         
-        esp_err_t ret = spi_device_transmit(spi_device, &t);
+        esp_err_t ret = safe_spi_transmit(&t);
         if (ret != ESP_OK) {
-            error_count++;
-            ESP_LOGE(TAG, "DMA transfer failed at offset %d/%d: %d (error %d/%d)", 
-                     offset, total_bytes, ret, error_count, MAX_ERRORS);
-            
-            // Too many errors - give up
-            if (error_count >= MAX_ERRORS) {
-                mp_raise_msg(&mp_type_RuntimeError, 
-                           MP_ERROR_TEXT("Display update failed: too many DMA errors"));
-            }
-            
-            // Retry this chunk
-            mp_hal_delay_ms(1);
-            continue;
+            ESP_LOGE(TAG, "DMA transfer failed at offset %d/%d after retries", offset, total_bytes);
+            mp_raise_msg(&mp_type_RuntimeError, 
+                       MP_ERROR_TEXT("Display update failed: DMA transfer error"));
         }
         
         offset += chunk_size;
