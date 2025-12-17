@@ -108,6 +108,12 @@ static void ili9488_write_data(uint8_t *data, size_t len) {
 //
 // Returns: ESP_OK on success, error code on failure after all retries exhausted
 static esp_err_t safe_spi_transmit(spi_transaction_t *t) {
+    // Safety check: ensure SPI device is initialized
+    if (!spi_device) {
+        ESP_LOGE(TAG, "SPI device not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     esp_err_t ret = ESP_OK;
     int retry_delay_ms = INITIAL_RETRY_DELAY_MS;
     
@@ -1104,7 +1110,8 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
                         t.tx_buffer = dma_buffer;
                         esp_err_t ret = safe_spi_transmit(&t);
                         if (ret != ESP_OK) {
-                            ESP_LOGW(TAG, "Sprite update DMA failed at row %d", row);
+                            // Log as warning since sprite update failure is non-critical
+                            ESP_LOGW(TAG, "Sprite moved update DMA failed at row %d (non-critical)", row);
                         }
                     } else {
                         // Fallback for very wide sprites
@@ -1134,7 +1141,8 @@ static mp_obj_t sprite_draw(size_t n_args, const mp_obj_t *args) {
                         t.tx_buffer = dma_buffer;
                         esp_err_t ret = safe_spi_transmit(&t);
                         if (ret != ESP_OK) {
-                            ESP_LOGW(TAG, "Sprite update DMA failed at row %d", row);
+                            // Log as warning since sprite update failure is non-critical
+                            ESP_LOGW(TAG, "Sprite in-place update DMA failed at row %d (non-critical)", row);
                         }
                     } else {
                         ili9488_write_data((uint8_t *)framebuffer + fb_offset, row_bytes);
