@@ -38,6 +38,10 @@ static const char *TAG = "ILI9488";
 #define ILI9488_PHYS_WIDTH  320
 #define ILI9488_PHYS_HEIGHT 480
 
+// DMA retry configuration
+#define MAX_DMA_RETRIES 3           // Maximum retry attempts per DMA transfer
+#define INITIAL_RETRY_DELAY_MS 1    // Initial delay between retries (exponentially increases)
+
 // DMA configuration
 #define DMA_BUFFER_SIZE (4096 - 16)  // 4KB minus SPI transaction overhead to stay within limits
 
@@ -85,14 +89,29 @@ static void ili9488_write_data(uint8_t *data, size_t len) {
     spi_device_polling_transmit(spi_device, &t);
 }
 
-// Helper: Safe DMA transmit with retry logic
-// Returns ESP_OK on success, error code on failure after retries
+// Helper: Safe DMA transmit with retry logic and exponential backoff
+// 
+// This function wraps spi_device_transmit() with automatic retry handling for
+// transient DMA errors. It implements exponential backoff to give hardware time
+// to recover between retries.
+//
+// Retry strategy:
+// - Attempt 1: Immediate transmission
+// - Attempt 2: Wait INITIAL_RETRY_DELAY_MS (1ms), then retry
+// - Attempt 3: Wait 2ms, then retry
+// - Attempt 4+: Continue doubling delay
+//
+// Usage:
+// - Use for all DMA transfers where temporary failures are acceptable
+// - For critical control commands, consider using polling mode instead
+// - Check return value and handle errors appropriately at call site
+//
+// Returns: ESP_OK on success, error code on failure after all retries exhausted
 static esp_err_t safe_spi_transmit(spi_transaction_t *t) {
-    const int MAX_RETRIES = 3;
     esp_err_t ret = ESP_OK;
-    int retry_delay_ms = 1;
+    int retry_delay_ms = INITIAL_RETRY_DELAY_MS;
     
-    for (int retry = 0; retry < MAX_RETRIES; retry++) {
+    for (int attempt = 0; attempt < MAX_DMA_RETRIES; attempt++) {
         ret = spi_device_transmit(spi_device, t);
         
         if (ret == ESP_OK) {
@@ -100,15 +119,17 @@ static esp_err_t safe_spi_transmit(spi_transaction_t *t) {
         }
         
         // Log warning and retry with exponential backoff
-        ESP_LOGW(TAG, "DMA transfer failed (retry %d/%d): %d", retry + 1, MAX_RETRIES, ret);
+        // Show as "attempt X/Y" to be clear about what's happening
+        ESP_LOGW(TAG, "DMA transfer failed (attempt %d/%d): %d", 
+                 attempt + 1, MAX_DMA_RETRIES, ret);
         
-        if (retry < MAX_RETRIES - 1) {
+        if (attempt < MAX_DMA_RETRIES - 1) {
             mp_hal_delay_ms(retry_delay_ms);
             retry_delay_ms *= 2;  // Exponential backoff
         }
     }
     
-    return ret;  // Return last error
+    return ret;  // Return last error after all retries exhausted
 }
 
 // Helper: Send large data using DMA (data must be in DMA-capable memory)
