@@ -52,7 +52,7 @@ class MockILI9488:
         print("  Show (update full screen)")
 
 # Replace ili9488 import with our mock
-sys.modules['ili9488'] = MockILI9488()
+sys.modules['ili9488'] = MockILI9488
 
 # Now import the UI library
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))

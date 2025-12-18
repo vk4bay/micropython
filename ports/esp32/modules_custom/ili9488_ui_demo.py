@@ -239,21 +239,23 @@ def demo_complete_ui():
 
 
 def run_all_demos():
-    """Run all widget demonstrations."""
+    """Run all widget demonstrations. Each demo overwrites the previous one."""
     print("\n" + "="*50)
     print("ILI9488 UI Widget Library Demo")
     print("="*50 + "\n")
     
-    # Note: Uncomment the demo you want to run
-    # Each demo will display on the screen
+    print("Running all demos sequentially...")
+    print("Note: Each demo will overwrite the screen.")
     
     demo_buttons()
-    # demo_dialogs()
-    # demo_progress_bars()
-    # demo_checkboxes()
-    # demo_radio_buttons()
-    # demo_panel()
-    # demo_complete_ui()
+    demo_dialogs()
+    demo_progress_bars()
+    demo_checkboxes()
+    demo_radio_buttons()
+    demo_panel()
+    demo_complete_ui()
+    
+    print("\nAll demos completed!")
 
 
 # Example usage guide

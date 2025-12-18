@@ -486,6 +486,31 @@ def show_ok_cancel_dialog(title, message):
     return dialog
 
 
+def show_yes_no_dialog(title, message):
+    """Show a Yes/No dialog (without Cancel)."""
+    dialog = Dialog(title, message, width=260)
+    
+    # Create buttons
+    btn_width = 80
+    btn_height = 35
+    btn_spacing = 10
+    total_btn_width = btn_width * 2 + btn_spacing
+    start_x = dialog.x + (dialog.width - total_btn_width) // 2
+    btn_y = dialog.y + dialog.height - btn_height - 15
+    
+    yes_btn = Button3D(start_x, btn_y, btn_width, btn_height, "Yes", COLOR_BTN_SUCCESS)
+    no_btn = Button3D(start_x + btn_width + btn_spacing, btn_y, 
+                     btn_width, btn_height, "No", COLOR_BTN_WARNING)
+    
+    dialog.buttons.append(yes_btn)
+    dialog.buttons.append(no_btn)
+    
+    dialog.draw()
+    dialog.update()
+    
+    return dialog
+
+
 def show_yes_no_cancel_dialog(title, message):
     """Show a Yes/No/Cancel dialog."""
     dialog = Dialog(title, message, width=300)
@@ -520,6 +545,8 @@ def show_dialog(title, message, dialog_type=DIALOG_OK):
         return show_ok_dialog(title, message)
     elif dialog_type == DIALOG_OK_CANCEL:
         return show_ok_cancel_dialog(title, message)
+    elif dialog_type == DIALOG_YES_NO:
+        return show_yes_no_dialog(title, message)
     elif dialog_type == DIALOG_YES_NO_CANCEL:
         return show_yes_no_cancel_dialog(title, message)
     else:
