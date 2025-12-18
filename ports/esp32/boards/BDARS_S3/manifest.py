@@ -16,11 +16,5 @@ freeze("$(PORT_DIR)/modules", (
     "mono32.py",
 ))
 
-# Freeze custom UI library modules
-freeze("$(PORT_DIR)/modules_custom", (
-    "ili9488_ui.py",
-    "ili9488_ui_demo.py",
-    "simple_ui_example.py",
-))
 
 
