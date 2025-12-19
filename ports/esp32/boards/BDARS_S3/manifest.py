@@ -14,6 +14,8 @@ freeze("$(PORT_DIR)/modules", (
     "dejavu32.py",
     "dejavu48.py",
     "mono32.py",
+    "ili9488_ui_demo.py",
+    "test_ui_widgets.py",
 ))
 
 

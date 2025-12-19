@@ -298,12 +298,12 @@ static mp_obj_t ili9488_deinit(void) {
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_deinit_obj, ili9488_deinit);
 
 // Get current display dimensions
-static mp_obj_t ili9488_get_width(void) {
+mp_obj_t ili9488_get_width(void) {
     return mp_obj_new_int(display_width);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_get_width_obj, ili9488_get_width);
 
-static mp_obj_t ili9488_get_height(void) {
+mp_obj_t ili9488_get_height(void) {
     return mp_obj_new_int(display_height);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_get_height_obj, ili9488_get_height);
@@ -342,7 +342,7 @@ static mp_obj_t ili9488_mem_info(void) {
 static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_mem_info_obj, ili9488_mem_info);
 
 // Partial update - optimized with DMA for larger regions
-static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
+mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
     if (!framebuffer || !spi_device || !dma_buffer) return mp_const_none;
 
     int x = mp_obj_get_int(args[0]);
@@ -409,7 +409,7 @@ static mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_update_region_obj, 4, 4, ili9488_update_region);
 
-static mp_obj_t ili9488_fill(mp_obj_t color_obj) {
+mp_obj_t ili9488_fill(mp_obj_t color_obj) {
     uint32_t color = mp_obj_get_int(color_obj);
 
     if (framebuffer) {
@@ -440,7 +440,7 @@ static mp_obj_t ili9488_pixel(size_t n_args, const mp_obj_t *args) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_pixel_obj, 3, 3, ili9488_pixel);
 
 // Draw line (Bresenham's algorithm with thickness support)
-static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
+mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
     int x0 = mp_obj_get_int(args[0]);
     int y0 = mp_obj_get_int(args[1]);
     int x1 = mp_obj_get_int(args[2]);
@@ -591,7 +591,7 @@ static mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_line_obj, 5, 5, ili9488_line);
 
-static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
+mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
     int x = mp_obj_get_int(args[0]);
     int y = mp_obj_get_int(args[1]);
     int w = mp_obj_get_int(args[2]);
@@ -622,7 +622,7 @@ static mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_rect_obj, 5, 6, ili9488_rect);
 
-static mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
+mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args) {
     int x0 = mp_obj_get_int(args[0]);
     int y0 = mp_obj_get_int(args[1]);
     int r = mp_obj_get_int(args[2]);
