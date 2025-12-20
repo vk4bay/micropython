@@ -92,39 +92,13 @@ class Font:
     
     def draw_char(self, x, y, char, color):
         """Draw a single character at the given position."""
-        # Use ili9488.text if available, otherwise draw a simple rectangle placeholder
-        if hasattr(ili9488, 'text'):
-            ili9488.text(x, y, char, color, size=self.size)
-        else:
-            # Fallback: draw a simple filled rectangle as character placeholder
-            char_w = self.char_width
-            char_h = self.char_height
-            # Draw character box (for debugging/placeholder)
-            ili9488.rect(x, y, char_w, char_h, color, None)
-            # Draw small indicator in center
-            cx = x + char_w // 2
-            cy = y + char_h // 2
-            ili9488.circle(cx, cy, 1, color, color)
+        # Use native ili9488.text for single character
+        ili9488.text(x, y, char, color, None, self.size)
     
     def draw_text(self, x, y, text, color, bg_color=None):
         """Draw text at the given position."""
-        print("Drawing text:", text, "at", x, y)
-        if hasattr(ili9488, 'text'):
-            # Use native text rendering if available
-            print("Native Drawing text:", text, "at", x, y)
-
-            ili9488.text(x, y, text, color, bg_color, size=self.size)
-        else:
-            print("Fallback Drawing text:", text, "at", x, y)
-            # Draw character by character
-            current_x = x
-            for char in text:
-                if bg_color is not None:
-                    # Draw background rectangle
-                    ili9488.rect(current_x, y, self.char_width, self.char_height,
-                               bg_color, bg_color)
-                self.draw_char(current_x, y, char, color)
-                current_x += self.char_width
+        # Use native text rendering
+        ili9488.text(x, y, text, color, bg_color, self.size)
     
     def draw_text_aligned(self, x, y, width, height, text, color, 
                          h_align=ALIGN_CENTER, v_align=ALIGN_MIDDLE, bg_color=None):

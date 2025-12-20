@@ -14,6 +14,6 @@ set(CONFIG_SPIRAM_CS_IO 28 CACHE STRING "" FORCE)
 list(APPEND MICROPY_SOURCE_PORT
     ${PROJECT_DIR}/modules_custom/ili9488.c
     ${PROJECT_DIR}/modules_custom/ft6336.c
-    ${PROJECT_DIR}/modules_custom/ili9488_ui.c
+    ${PROJECT_DIR}/modules_custom/ili9488_ui_helpers.c
 )
 

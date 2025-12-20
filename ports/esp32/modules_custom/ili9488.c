@@ -54,6 +54,7 @@ static int line_thickness = 1;
 static uint8_t current_orientation = ORIENTATION_PORTRAIT;
 static int display_width = ILI9488_PHYS_WIDTH;
 static int display_height = ILI9488_PHYS_HEIGHT;
+static mp_obj_t custom_font = MP_OBJ_NULL; // Custom Python font module
 
 // Helper: Send command (polling mode for control commands)
 static void ili9488_write_cmd(uint8_t cmd)
@@ -1004,6 +1005,83 @@ static const uint8_t font_8x8[96][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}  // DEL
 };
 
+// Helper function to render text using custom Python font
+static void render_text_custom_font(int x, int y, const char *text, uint32_t color, uint32_t bg_color)
+{
+    // Get font functions using string literals
+    qstr get_ch_qstr = qstr_from_str("get_ch");
+    qstr height_qstr = qstr_from_str("height");
+
+    mp_obj_t get_ch_func = mp_load_attr(custom_font, get_ch_qstr);
+    mp_obj_t height_func = mp_load_attr(custom_font, height_qstr);
+
+    // Get font height
+    int font_height = mp_obj_get_int(mp_call_function_0(height_func));
+
+    int cursor_x = x;
+
+    // Render each character
+    for (const char *c = text; *c != '\0'; c++)
+    {
+        uint8_t ch = (uint8_t)*c;
+
+        // Skip non-printable characters
+        if (ch < 32 || ch > 126)
+        {
+            continue;
+        }
+
+        // Get character data: get_ch(ch) returns (buffer, width, height)
+        mp_obj_t char_data = mp_call_function_1(get_ch_func, MP_OBJ_NEW_SMALL_INT(ch));
+
+        // Unpack tuple: (buffer, width, height)
+        mp_obj_t *items;
+        size_t len;
+        mp_obj_get_array(char_data, &len, &items);
+
+        if (len != 3)
+        {
+            continue; // Invalid data
+        }
+
+        // Get buffer, width, and height
+        mp_buffer_info_t bufinfo;
+        mp_get_buffer_raise(items[0], &bufinfo, MP_BUFFER_READ);
+        int char_width = mp_obj_get_int(items[1]);
+        int char_height = mp_obj_get_int(items[2]);
+
+        const uint8_t *glyph_data = (const uint8_t *)bufinfo.buf;
+
+        // Draw character
+        for (int py = 0; py < char_height; py++)
+        {
+            for (int px = 0; px < char_width; px++)
+            {
+                // Calculate byte and bit position
+                int byte_pos = (py * char_width + px) / 8;
+                int bit_pos = (py * char_width + px) % 8;
+
+                // Check if pixel is set
+                bool pixel_set = (glyph_data[byte_pos] & (1 << bit_pos)) != 0;
+
+                int screen_x = cursor_x + px;
+                int screen_y = y + py;
+
+                if (pixel_set)
+                {
+                    set_pixel_fb(screen_x, screen_y, color);
+                }
+                else if (bg_color != COLOR_NONE)
+                {
+                    set_pixel_fb(screen_x, screen_y, bg_color);
+                }
+            }
+        }
+
+        cursor_x += char_width;
+    }
+}
+
 // Text rendering function
 // Args: x, y, text, color, [bg_color], [size]
 static mp_obj_t ili9488_text(size_t n_args, const mp_obj_t *args)
@@ -1025,6 +1103,14 @@ static mp_obj_t ili9488_text(size_t n_args, const mp_obj_t *args)
         bg_color = mp_obj_get_int(args[4]);
     }
 
+    // If custom font is set, use it
+    if (custom_font != MP_OBJ_NULL)
+    {
+        render_text_custom_font(x, y, text, color, bg_color);
+        return mp_const_none;
+    }
+
+    // Otherwise, use built-in 8x8 font with size multiplier
     // Optional size multiplier (default: 1)
     int size = 1;
     if (n_args >= 6)
@@ -1095,6 +1181,23 @@ static mp_obj_t ili9488_text(size_t n_args, const mp_obj_t *args)
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_text_obj, 4, 6, ili9488_text);
+
+// Set custom font from Python module
+// Args: font_module
+static mp_obj_t ili9488_set_font(mp_obj_t font_module)
+{
+    custom_font = font_module;
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(ili9488_set_font_obj, ili9488_set_font);
+
+// Clear custom font (revert to built-in)
+static mp_obj_t ili9488_clear_font(void)
+{
+    custom_font = MP_OBJ_NULL;
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(ili9488_clear_font_obj, ili9488_clear_font);
 
 typedef struct
 {
@@ -1440,6 +1543,8 @@ static const mp_rom_map_elem_t ili9488_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_circle), MP_ROM_PTR(&ili9488_circle_obj)},
     {MP_ROM_QSTR(MP_QSTR_triangle), MP_ROM_PTR(&ili9488_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&ili9488_text_obj)},
+    {MP_ROM_QSTR(MP_QSTR_set_font), MP_ROM_PTR(&ili9488_set_font_obj)},
+    {MP_ROM_QSTR(MP_QSTR_clear_font), MP_ROM_PTR(&ili9488_clear_font_obj)},
     {MP_ROM_QSTR(MP_QSTR_show), MP_ROM_PTR(&ili9488_show_obj)},
     {MP_ROM_QSTR(MP_QSTR_update_region), MP_ROM_PTR(&ili9488_update_region_obj)},
     {MP_ROM_QSTR(MP_QSTR_Sprite), MP_ROM_PTR(&sprite_type)},
