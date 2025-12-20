@@ -77,14 +77,6 @@ static inline uint32_t lighten_color(uint32_t color, int percent)
     r = (r * percent) / 100;
     g = (g * percent) / 100;
     b = (b * percent) / 100;
-
-    if (r > 255)
-        r = 255;
-    if (g > 255)
-        g = 255;
-    if (b > 255)
-        b = 255;
-
     return (r << 16) | (g << 8) | b;
 }
 
@@ -490,9 +482,9 @@ static const mp_rom_map_elem_t ui_module_globals_table[] = {
 };
 static MP_DEFINE_CONST_DICT(ui_module_globals, ui_module_globals_table);
 
-const mp_obj_module_t ili9488_ui_module = {
+const mp_obj_module_t ili9488_ui_helpers_module = {
     .base = {&mp_type_module},
     .globals = (mp_obj_dict_t *)&ui_module_globals,
 };
 
-MP_REGISTER_MODULE(MP_QSTR_ili9488_ui, ili9488_ui_module);
+MP_REGISTER_MODULE(MP_QSTR_ili9488_ui_helpers, ili9488_ui_helpers_module);
