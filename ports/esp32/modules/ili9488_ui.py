@@ -2,7 +2,7 @@
 ili9488_ui.py - High-level UI widget library for ili9488 display
 
 This module provides common UI widgets and dialogs for the ili9488 display driver,
-including 3D buttons, dialog boxes, and other UI components.
+including 3D buttons, dialog boxes, and other UI components with font support.
 
 Usage:
     import ili9488
@@ -60,6 +60,85 @@ RESULT_CANCEL = 2
 RESULT_YES = 3
 RESULT_NO = 4
 
+# Font sizes
+FONT_SMALL = 1
+FONT_MEDIUM = 2
+FONT_LARGE = 3
+
+# Text alignment
+ALIGN_LEFT = 0
+ALIGN_CENTER = 1
+ALIGN_RIGHT = 2
+ALIGN_TOP = 0
+ALIGN_MIDDLE = 1
+ALIGN_BOTTOM = 2
+
+
+class Font:
+    """Font rendering class with multiple size support."""
+    
+    def __init__(self, size=FONT_MEDIUM):
+        self.size = size
+        self.char_width = 8 * size
+        self.char_height = 8 * size
+    
+    def get_text_width(self, text):
+        """Calculate the width of text in pixels."""
+        return len(text) * self.char_width
+    
+    def get_text_height(self):
+        """Get the height of text in pixels."""
+        return self.char_height
+    
+    def draw_char(self, x, y, char, color):
+        """Draw a single character at the given position."""
+        # Use native ili9488.text for single character
+        ili9488.text(x, y, char, color, None, self.size)
+    
+    def draw_text(self, x, y, text, color, bg_color=None):
+        """Draw text at the given position."""
+        # Use native text rendering
+        ili9488.text(x, y, text, color, bg_color, self.size)
+    
+    def draw_text_aligned(self, x, y, width, height, text, color, 
+                         h_align=ALIGN_CENTER, v_align=ALIGN_MIDDLE, bg_color=None):
+        """Draw text with alignment within a bounding box."""
+        text_width = self.get_text_width(text)
+        text_height = self.get_text_height()
+        
+        # Calculate horizontal position
+        if h_align == ALIGN_LEFT:
+            text_x = x
+        elif h_align == ALIGN_CENTER:
+            text_x = x + (width - text_width) // 2
+        else:  # ALIGN_RIGHT
+            text_x = x + width - text_width
+        
+        # Calculate vertical position
+        if v_align == ALIGN_TOP:
+            text_y = y
+        elif v_align == ALIGN_MIDDLE:
+            text_y = y + (height - text_height) // 2
+        else:  # ALIGN_BOTTOM
+            text_y = y + height - text_height
+        
+        self.draw_text(text_x, text_y, text, color, bg_color)
+
+
+# Default font instance
+_default_font = Font(FONT_MEDIUM)
+
+
+def set_default_font(size=FONT_MEDIUM):
+    """Set the default font size for all widgets."""
+    global _default_font
+    _default_font = Font(size)
+
+
+def get_default_font():
+    """Get the current default font."""
+    return _default_font
+
 
 def _darken_color(color, factor=0.6):
     """Darken a color by the given factor (0.0-1.0)."""
@@ -104,6 +183,11 @@ class Widget:
         self.height = height
         self.visible = True
         self.enabled = True
+        self.font = _default_font
+    
+    def set_font(self, font):
+        """Set the font for this widget."""
+        self.font = font
     
     def draw(self):
         """Draw the widget. Override in subclasses."""
@@ -118,6 +202,38 @@ class Widget:
         """Update the widget's region on display."""
         if self.visible:
             ili9488.update_region(self.x, self.y, self.width, self.height)
+
+
+class Label(Widget):
+    """Text label widget."""
+    
+    def __init__(self, x, y, text, color=COLOR_BLACK, bg_color=None,
+                 h_align=ALIGN_LEFT, v_align=ALIGN_TOP):
+        font = _default_font
+        width = font.get_text_width(text)
+        height = font.get_text_height()
+        super().__init__(x, y, width, height)
+        self.text = text
+        self.color = color
+        self.bg_color = bg_color
+        self.h_align = h_align
+        self.v_align = v_align
+    
+    def set_text(self, text):
+        """Update the label text."""
+        self.text = text
+        self.width = self.font.get_text_width(text)
+        self.draw()
+        self.update()
+    
+    def draw(self):
+        """Draw the label."""
+        if not self.visible:
+            return
+        
+        self.font.draw_text_aligned(self.x, self.y, self.width, self.height,
+                                   self.text, self.color, 
+                                   self.h_align, self.v_align, self.bg_color)
 
 
 class Button(Widget):
@@ -145,11 +261,10 @@ class Button(Widget):
         ili9488.rect(self.x, self.y, self.width, self.height, 
                      self.border_color, display_color)
         
-        # Draw text (simple centered text - would need font support for real implementation)
-        # For now, just draw a small indicator in the center
-        center_x = self.x + self.width // 2
-        center_y = self.y + self.height // 2
-        ili9488.circle(center_x, center_y, 3, self.text_color, self.text_color)
+        # Draw centered text
+        self.font.draw_text_aligned(self.x, self.y, self.width, self.height,
+                                   self.text, self.text_color,
+                                   ALIGN_CENTER, ALIGN_MIDDLE)
     
     def set_pressed(self, pressed):
         """Set the button pressed state."""
@@ -184,12 +299,14 @@ class Button3D(Widget):
             top_color = _darken_color(base_color, 0.5)
             bottom_color = _lighten_color(base_color, 1.2)
             face_color = _darken_color(base_color, 0.8)
+            text_offset = 1
         else:
             # Raised state - appears elevated
             # Light top/left, dark bottom/right
             top_color = _lighten_color(base_color, 1.3)
             bottom_color = _darken_color(base_color, 0.6)
             face_color = base_color
+            text_offset = 0
         
         # Draw face
         ili9488.rect(self.x + self.border_width, 
@@ -222,13 +339,11 @@ class Button3D(Widget):
                         self.x + self.width - i - 1, self.y + self.height - i - 1,
                         bottom_color)
         
-        # Draw text indicator (simple circle in center)
-        center_x = self.x + self.width // 2
-        center_y = self.y + self.height // 2
-        if self.pressed:
-            center_x += 1
-            center_y += 1
-        ili9488.circle(center_x, center_y, 3, self.text_color, self.text_color)
+        # Draw centered text with offset when pressed
+        self.font.draw_text_aligned(self.x + text_offset, self.y + text_offset, 
+                                   self.width, self.height,
+                                   self.text, self.text_color,
+                                   ALIGN_CENTER, ALIGN_MIDDLE)
     
     def set_pressed(self, pressed):
         """Set the button pressed state."""
@@ -270,7 +385,7 @@ class ProgressBar(Widget):
     
     def __init__(self, x, y, width, height, min_val=0, max_val=100, 
                  fg_color=COLOR_BTN_PRIMARY, bg_color=COLOR_GRAY_LIGHT,
-                 border_color=COLOR_GRAY_DARK):
+                 border_color=COLOR_GRAY_DARK, show_percent=False):
         super().__init__(x, y, width, height)
         self.min_val = min_val
         self.max_val = max_val
@@ -278,6 +393,7 @@ class ProgressBar(Widget):
         self.fg_color = fg_color
         self.bg_color = bg_color
         self.border_color = border_color
+        self.show_percent = show_percent
     
     def set_value(self, value):
         """Set the progress value."""
@@ -304,17 +420,30 @@ class ProgressBar(Widget):
                 ili9488.line(self.x + 2, self.y + 2 + i,
                            self.x + 2 + fill_width - 1, self.y + 2 + i,
                            self.fg_color)
+        
+        # Draw percentage text if enabled
+        if self.show_percent:
+            percent = int(progress * 100)
+            text = f"{percent}%"
+            text_color = COLOR_WHITE if fill_width > self.width // 2 else COLOR_BLACK
+            self.font.draw_text_aligned(self.x, self.y, self.width, self.height,
+                                       text, text_color,
+                                       ALIGN_CENTER, ALIGN_MIDDLE)
 
 
 class CheckBox(Widget):
-    """A checkbox widget."""
+    """A checkbox widget with optional label."""
     
     def __init__(self, x, y, size=20, checked=False, 
-                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE):
+                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label=""):
         super().__init__(x, y, size, size)
         self.checked = checked
         self.color = color
         self.bg_color = bg_color
+        self.label = label
+        # Adjust width if there's a label
+        if label:
+            self.width = size + 8 + self.font.get_text_width(label)
     
     def toggle(self):
         """Toggle the checkbox state."""
@@ -327,9 +456,11 @@ class CheckBox(Widget):
         if not self.visible:
             return
         
+        size = self.height  # Original box size
+        
         # Draw box
         box_color = COLOR_GRAY if not self.enabled else COLOR_GRAY_DARK
-        ili9488.rect(self.x, self.y, self.width, self.height,
+        ili9488.rect(self.x, self.y, size, size,
                     box_color, self.bg_color)
         
         # Draw check mark if checked
@@ -337,18 +468,24 @@ class CheckBox(Widget):
             # Draw a simple X or checkmark
             margin = 4
             ili9488.line(self.x + margin, self.y + margin,
-                        self.x + self.width - margin, self.y + self.height - margin,
+                        self.x + size - margin, self.y + size - margin,
                         self.color)
-            ili9488.line(self.x + self.width - margin, self.y + margin,
-                        self.x + margin, self.y + self.height - margin,
+            ili9488.line(self.x + size - margin, self.y + margin,
+                        self.x + margin, self.y + size - margin,
                         self.color)
+        
+        # Draw label if present
+        if self.label:
+            label_x = self.x + size + 8
+            label_y = self.y + (size - self.font.get_text_height()) // 2
+            self.font.draw_text(label_x, label_y, self.label, COLOR_BLACK)
 
 
 class RadioButton(Widget):
-    """A radio button widget."""
+    """A radio button widget with optional label."""
     
     def __init__(self, x, y, radius=10, selected=False, 
-                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE):
+                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label=""):
         super().__init__(x - radius, y - radius, radius * 2, radius * 2)
         self.center_x = x
         self.center_y = y
@@ -356,7 +493,11 @@ class RadioButton(Widget):
         self.selected = selected
         self.color = color
         self.bg_color = bg_color
+        self.label = label
         self.group = None
+        # Adjust width if there's a label
+        if label:
+            self.width = radius * 2 + 8 + self.font.get_text_width(label)
     
     def select(self):
         """Select this radio button and deselect others in group."""
@@ -385,6 +526,12 @@ class RadioButton(Widget):
             inner_radius = max(1, self.radius - 4)
             ili9488.circle(self.center_x, self.center_y, inner_radius,
                           self.color, self.color)
+        
+        # Draw label if present
+        if self.label:
+            label_x = self.x + self.radius * 2 + 8
+            label_y = self.center_y - self.font.get_text_height() // 2
+            self.font.draw_text(label_x, label_y, self.label, COLOR_BLACK)
 
 
 class Dialog:
