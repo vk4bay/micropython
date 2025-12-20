@@ -374,35 +374,47 @@ mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args) {
     // For larger updates, use DMA with bounce buffer
     gpio_set_level(dc_pin, 1);  // Set DC high for data once
     
+    size_t accumulated = 0;  // Track bytes in DMA buffer
+    spi_transaction_t t = { 0 };
+    
     for (int row = 0; row < h; row++) {
         int fb_offset = ((y + row) * display_width + x) * 3;
         
-        if (row_bytes <= DMA_BUFFER_SIZE) {
-            // Copy row to DMA buffer and send
-            memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
-            
-            spi_transaction_t t;
-            memset(&t, 0, sizeof(t));
-            t.length = row_bytes * 8;
-            t.tx_buffer = dma_buffer;
-            spi_device_transmit(spi_device, &t);
+        if (accumulated + row_bytes <= DMA_BUFFER_SIZE) {
+            memcpy(dma_buffer + accumulated, framebuffer + fb_offset, row_bytes);
+            accumulated += row_bytes;
         } else {
-            // Row too large, send in chunks
-            size_t offset = 0;
-            while (offset < row_bytes) {
-                size_t chunk = (row_bytes - offset > DMA_BUFFER_SIZE) ? 
-                              DMA_BUFFER_SIZE : (row_bytes - offset);
-                memcpy(dma_buffer, framebuffer + fb_offset + offset, chunk);
-                
-                spi_transaction_t t;
-                memset(&t, 0, sizeof(t));
-                t.length = chunk * 8;
+            if (accumulated > 0) {
+                t.length = accumulated * 8;
                 t.tx_buffer = dma_buffer;
                 spi_device_transmit(spi_device, &t);
-                
-                offset += chunk;
+                accumulated = 0;
+            }
+            
+            if (row_bytes <= DMA_BUFFER_SIZE) {
+                memcpy(dma_buffer, framebuffer + fb_offset, row_bytes);
+                accumulated = row_bytes;
+            } else {
+                size_t offset = 0;
+                while (offset < row_bytes) {
+                    size_t chunk = (row_bytes - offset > DMA_BUFFER_SIZE) ? 
+                                  DMA_BUFFER_SIZE : (row_bytes - offset);
+                    memcpy(dma_buffer, framebuffer + fb_offset + offset, chunk);
+                    
+                    t.length = chunk * 8;
+                    t.tx_buffer = dma_buffer;
+                    spi_device_transmit(spi_device, &t);
+                    
+                    offset += chunk;
+                }
             }
         }
+    }
+    
+    if (accumulated > 0) {
+        t.length = accumulated * 8;
+        t.tx_buffer = dma_buffer;
+        spi_device_transmit(spi_device, &t);
     }
 
     return mp_const_none;
