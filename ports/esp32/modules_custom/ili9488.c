@@ -54,6 +54,8 @@ static int line_thickness = 1;
 static uint8_t current_orientation = ORIENTATION_PORTRAIT;
 static int display_width = ILI9488_PHYS_WIDTH;
 static int display_height = ILI9488_PHYS_HEIGHT;
+// NOTE: custom_font is not thread-safe. All accesses (e.g., via ili9488_set_font/ili9488_text)
+// must be made from a single task/thread and not from ISRs to avoid race conditions.
 static mp_obj_t custom_font = MP_OBJ_NULL; // Custom Python font module
 
 // Helper: Send command (polling mode for control commands)
