@@ -220,12 +220,27 @@ class Label(Widget):
         self.v_align = v_align
     
     def set_text(self, text):
-        """Update the label text."""
+        # Save old width for clearing
+        old_width = self.width
+        old_height = self.height
+        
+        # Update text and calculate new dimensions
         self.text = text
         self.width = self.font.get_text_width(text)
+        self.height = self.font.get_text_height()
+        
+        # Clear the larger of old/new area
+        clear_width = max(old_width, self.width)
+        clear_height = max(old_height, self.height)
+        
+        if self.bg_color is not None:
+            ili9488.rect(self.x, self.y, clear_width, clear_height+1, 
+                        self.bg_color, self.bg_color)
+        
+        # Draw new text
         self.draw()
         self.update()
-    
+        
     def draw(self):
         """Draw the label."""
         if not self.visible:
@@ -571,9 +586,14 @@ class Dialog:
         ili9488.rect(self.x, self.y, self.width, title_height,
                     COLOR_GRAY_DARK, COLOR_BTN_PRIMARY)
         
-        # Draw title text indicator (circle)
-        ili9488.circle(self.x + 15, self.y + title_height // 2, 3,
-                      COLOR_WHITE, COLOR_WHITE)
+        ili9488.text(self.x + 10, self.y + 7, self.title, COLOR_WHITE, COLOR_BTN_PRIMARY, FONT_MEDIUM)
+        
+        # Draw message text
+        message_y = self.y + title_height + 15
+        ili9488.text(self.x + 10, message_y, self.message, COLOR_BLACK, COLOR_GRAY_LIGHT, FONT_MEDIUM)
+
+        # TODO: Paul needs to add word wrapping for long messages.
+
     
     def draw(self):
         """Draw the dialog."""
@@ -613,7 +633,7 @@ def show_ok_cancel_dialog(title, message):
     dialog = Dialog(title, message)
     
     # Create buttons
-    btn_width = 80
+    btn_width = 95
     btn_height = 35
     btn_spacing = 10
     total_btn_width = btn_width * 2 + btn_spacing
@@ -638,7 +658,7 @@ def show_yes_no_dialog(title, message):
     dialog = Dialog(title, message, width=260)
     
     # Create buttons
-    btn_width = 80
+    btn_width = 95
     btn_height = 35
     btn_spacing = 10
     total_btn_width = btn_width * 2 + btn_spacing
@@ -1119,34 +1139,33 @@ class Compass(Widget):
     
     def rotate_to(self, target_heading, steps=20, delay_ms=30):
         """Smoothly animate the compass needle to a target heading.
-        
         Takes the shortest path around the circle.
-        
         Args:
             target_heading: The heading to rotate to (0-360)
             steps: Number of intermediate steps
             delay_ms: Delay between steps in milliseconds
         """
         import time
-        
+    
         # Normalize target
         while target_heading < 0:
             target_heading += 360
         while target_heading >= 360:
             target_heading -= 360
-        
+    
         # Calculate shortest rotation direction
-        diff = target_heading - self.heading
-        
+        start_heading = self.heading  # Save the starting position
+        diff = target_heading - start_heading
+    
         # Normalize diff to -180 to 180
         if diff > 180:
             diff -= 360
         elif diff < -180:
             diff += 360
-        
+    
         step_size = diff / steps
-        
+    
         for i in range(steps + 1):
-            heading = self.heading + (step_size * i)
+            heading = start_heading + (step_size * i)  
             self.set_heading(heading)
             time.sleep_ms(delay_ms)
