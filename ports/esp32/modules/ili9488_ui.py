@@ -1521,3 +1521,26 @@ class LineChart(Widget):
         self.max_val = max_val
         self.draw()
         self.update()
+
+
+#for testing
+
+# chart = ui.LineChart(10, 10, 300, 220, max_points=50,
+#                      line_color=ui.COLOR_GREEN,
+#                      bg_color=ui.COLOR_BLACK,
+#                      grid_color=ui.COLOR_GRAY_DARK,
+#                      show_labels=True,
+#                      show_grid=True)
+
+# # Draw initial empty chart
+# chart.draw()
+# ili9488.show()
+
+# # Simulate real-time data (sine wave)
+# angle = 0
+# while True:
+#     value = 50 + 30 * math.sin(math.radians(angle))
+#     chart.add_point(value)
+    
+#     angle = (angle + 10) % 360
+#     time.sleep_ms(100)
