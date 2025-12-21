@@ -726,3 +726,425 @@ class ButtonGroup:
             if btn.contains(x, y) and btn.visible and btn.enabled:
                 return btn
         return None
+
+
+class Dial(Widget):
+    """A dial/gauge widget for displaying analog values.
+    
+    Displays a circular gauge with a rotating needle to indicate a value
+    within a specified range. Useful for speedometers, temperature gauges, etc.
+    
+    Args:
+        x, y: Center position of the dial
+        radius: Radius of the dial
+        min_val: Minimum value
+        max_val: Maximum value
+        start_angle: Starting angle in degrees (default -135, 7-8 o'clock position)
+        end_angle: Ending angle in degrees (default 135, 4-5 o'clock position)
+        color: Main dial color
+        needle_color: Color of the needle/pointer
+        bg_color: Background color for erasing old needle
+    """
+    
+    def __init__(self, x, y, radius, min_val=0, max_val=100, 
+                 start_angle=-135, end_angle=135,
+                 color=COLOR_WHITE, needle_color=COLOR_RED, bg_color=COLOR_BLACK):
+        # Widget bounds are a square around the circle
+        super().__init__(x - radius - 5, y - radius - 5, 
+                        (radius + 5) * 2, (radius + 5) * 2)
+        self.center_x = x
+        self.center_y = y
+        self.radius = radius
+        self.min_val = min_val
+        self.max_val = max_val
+        self.start_angle = start_angle
+        self.end_angle = end_angle
+        self.color = color
+        self.needle_color = needle_color
+        self.bg_color = bg_color
+        self.current_value = min_val
+        self.last_needle_angle = None
+        self.show_ticks = True
+        self.num_major_ticks = 9
+        self.num_minor_ticks = 4  # Between each major tick
+    
+    def _value_to_angle(self, value):
+        """Convert a value to an angle in degrees."""
+        # Clamp value to range
+        value = max(self.min_val, min(self.max_val, value))
+        
+        # Calculate proportion through range
+        proportion = (value - self.min_val) / (self.max_val - self.min_val)
+        
+        # Map to angle range
+        angle_range = self.end_angle - self.start_angle
+        angle = self.start_angle + (proportion * angle_range)
+        
+        return angle
+    
+    def _angle_to_point(self, angle, distance):
+        """Convert angle and distance to x, y coordinates.
+        
+        Angle in degrees, 0=right, 90=down, 180=left, 270=up
+        """
+        import math
+        rad = math.radians(angle)
+        x = self.center_x + int(distance * math.cos(rad))
+        y = self.center_y + int(distance * math.sin(rad))
+        return x, y
+    
+    def draw_bezel(self):
+        """Draw the outer circle bezel."""
+        # Draw outer circle
+        ili9488.circle(self.center_x, self.center_y, self.radius, self.color)
+        # Draw inner circle for double-ring effect
+        if self.radius > 10:
+            ili9488.circle(self.center_x, self.center_y, self.radius - 2, 
+                          _darken_color(self.color, 0.7))
+    
+    def draw_ticks(self):
+        """Draw tick marks around the dial."""
+        if not self.show_ticks:
+            return
+        
+        import math
+        angle_range = self.end_angle - self.start_angle
+        
+        # Draw major ticks
+        for i in range(self.num_major_ticks):
+            proportion = i / (self.num_major_ticks - 1)
+            angle = self.start_angle + (proportion * angle_range)
+            
+            # Major tick
+            outer_x, outer_y = self._angle_to_point(angle, self.radius - 3)
+            inner_x, inner_y = self._angle_to_point(angle, self.radius - 12)
+            ili9488.line(inner_x, inner_y, outer_x, outer_y, self.color)
+        
+        # Draw minor ticks
+        if self.num_minor_ticks > 0:
+            total_segments = (self.num_major_ticks - 1) * (self.num_minor_ticks + 1)
+            for i in range(total_segments + 1):
+                # Skip positions where major ticks are
+                if i % (self.num_minor_ticks + 1) == 0:
+                    continue
+                
+                proportion = i / total_segments
+                angle = self.start_angle + (proportion * angle_range)
+                
+                # Minor tick (shorter)
+                outer_x, outer_y = self._angle_to_point(angle, self.radius - 3)
+                inner_x, inner_y = self._angle_to_point(angle, self.radius - 8)
+                tick_color = _darken_color(self.color, 0.6)
+                ili9488.line(inner_x, inner_y, outer_x, outer_y, tick_color)
+    
+    def draw_needle(self, value, color=None):
+        """Draw the needle pointing to the specified value."""
+        if color is None:
+            color = self.needle_color
+        
+        angle = self._value_to_angle(value)
+        
+        # Calculate needle endpoint (80% of radius)
+        needle_length = int(self.radius * 0.75)
+        end_x, end_y = self._angle_to_point(angle, needle_length)
+        
+        # Draw needle line
+        ili9488.set_line_thickness(3)
+        ili9488.line(self.center_x, self.center_y, end_x, end_y, color)
+        ili9488.set_line_thickness(1)
+        
+        # Draw center cap
+        cap_radius = 5
+        ili9488.circle(self.center_x, self.center_y, cap_radius, 
+                      _darken_color(color, 0.6), color)
+        
+        return angle
+    
+    def erase_needle(self, angle):
+        """Erase the needle at the specified angle."""
+        # Calculate needle endpoint
+        needle_length = int(self.radius * 0.75)
+        end_x, end_y = self._angle_to_point(angle, needle_length)
+        
+        # Erase with background color (slightly thicker to fully cover)
+        ili9488.set_line_thickness(4)
+        ili9488.line(self.center_x, self.center_y, end_x, end_y, self.bg_color)
+        ili9488.set_line_thickness(1)
+    
+    def draw(self):
+        """Draw the complete dial."""
+        if not self.visible:
+            return
+        
+        self.draw_bezel()
+        self.draw_ticks()
+        self.last_needle_angle = self.draw_needle(self.current_value)
+    
+    def set_value(self, value):
+        """Update the dial to show a new value."""
+        if value == self.current_value:
+            return
+        
+        # Erase old needle if it was drawn
+        if self.last_needle_angle is not None:
+            self.erase_needle(self.last_needle_angle)
+            # Redraw any ticks that might have been erased
+            self.draw_ticks()
+        
+        # Draw new needle
+        self.current_value = value
+        self.last_needle_angle = self.draw_needle(value)
+        
+        # Update display
+        self.update()
+    
+    def animate_to(self, target_value, steps=10, delay_ms=30):
+        """Smoothly animate the needle to a target value.
+        
+        Args:
+            target_value: The value to animate to
+            steps: Number of intermediate steps
+            delay_ms: Delay between steps in milliseconds
+        """
+        import time
+        
+        start_value = self.current_value
+        step_size = (target_value - start_value) / steps
+        
+        for i in range(steps + 1):
+            value = start_value + (step_size * i)
+            self.set_value(value)
+            time.sleep_ms(delay_ms)
+
+
+class Compass(Widget):
+    """A compass widget for displaying directional headings.
+    
+    Displays a circular compass rose with cardinal directions (N, S, E, W)
+    and a rotating needle indicating the current heading.
+    
+    Args:
+        x, y: Center position of the compass
+        radius: Radius of the compass
+        color: Main compass color
+        needle_color: Color of the heading needle
+        bg_color: Background color
+    """
+    
+    def __init__(self, x, y, radius, color=COLOR_WHITE, 
+                 needle_color=COLOR_RED, bg_color=COLOR_BLACK):
+        # Widget bounds are a square around the circle
+        super().__init__(x - radius - 5, y - radius - 5, 
+                        (radius + 5) * 2, (radius + 5) * 2)
+        self.center_x = x
+        self.center_y = y
+        self.radius = radius
+        self.color = color
+        self.needle_color = needle_color
+        self.bg_color = bg_color
+        self.heading = 0  # Current heading in degrees (0-360, 0=North)
+        self.last_needle_angle = None
+        self.show_rose = True
+        self.show_degrees = True
+    
+    def _heading_to_angle(self, heading):
+        """Convert compass heading to screen angle.
+        
+        Compass: 0=North, 90=East, 180=South, 270=West
+        Screen: 0=Right, 90=Down, 180=Left, 270=Up
+        Conversion: screen_angle = heading - 90
+        """
+        angle = heading - 90
+        while angle < 0:
+            angle += 360
+        while angle >= 360:
+            angle -= 360
+        return angle
+    
+    def _angle_to_point(self, angle, distance):
+        """Convert angle and distance to x, y coordinates."""
+        import math
+        rad = math.radians(angle)
+        x = self.center_x + int(distance * math.cos(rad))
+        y = self.center_y + int(distance * math.sin(rad))
+        return x, y
+    
+    def draw_bezel(self):
+        """Draw the outer circle bezel."""
+        # Draw outer circle
+        ili9488.circle(self.center_x, self.center_y, self.radius, self.color)
+        # Draw inner circle for double-ring effect
+        if self.radius > 10:
+            ili9488.circle(self.center_x, self.center_y, self.radius - 2, 
+                          _darken_color(self.color, 0.7))
+    
+    def draw_cardinal_points(self):
+        """Draw N, S, E, W markers."""
+        if not self.show_rose:
+            return
+        
+        # Cardinal directions: N=0°, E=90°, S=180°, W=270° (compass heading)
+        cardinals = [
+            (0, 'N', COLOR_RED),      # North - Red
+            (90, 'E', COLOR_WHITE),   # East - White
+            (180, 'S', COLOR_WHITE),  # South - White
+            (270, 'W', COLOR_WHITE)   # West - White
+        ]
+        
+        for heading, label, label_color in cardinals:
+            screen_angle = self._heading_to_angle(heading)
+            
+            # Draw tick mark
+            outer_x, outer_y = self._angle_to_point(screen_angle, self.radius - 3)
+            inner_x, inner_y = self._angle_to_point(screen_angle, self.radius - 15)
+            ili9488.line(inner_x, inner_y, outer_x, outer_y, label_color)
+            
+            # Draw label indicator (small circle for now, would be text with font support)
+            label_x, label_y = self._angle_to_point(screen_angle, self.radius - 22)
+            ili9488.circle(label_x, label_y, 3, label_color, label_color)
+    
+    def draw_degree_marks(self):
+        """Draw degree tick marks around the compass."""
+        if not self.show_degrees:
+            return
+        
+        # Draw marks every 30 degrees
+        for heading in range(0, 360, 30):
+            # Skip cardinal directions (already drawn with longer ticks)
+            if heading % 90 == 0:
+                continue
+            
+            screen_angle = self._heading_to_angle(heading)
+            
+            # Draw tick
+            outer_x, outer_y = self._angle_to_point(screen_angle, self.radius - 3)
+            inner_x, inner_y = self._angle_to_point(screen_angle, self.radius - 10)
+            tick_color = _darken_color(self.color, 0.6)
+            ili9488.line(inner_x, inner_y, outer_x, outer_y, tick_color)
+    
+    def draw_needle(self, heading, color=None):
+        """Draw the compass needle pointing to the specified heading."""
+        if color is None:
+            color = self.needle_color
+        
+        screen_angle = self._heading_to_angle(heading)
+        
+        # Draw main needle (pointing to heading)
+        needle_length = int(self.radius * 0.7)
+        end_x, end_y = self._angle_to_point(screen_angle, needle_length)
+        
+        ili9488.set_line_thickness(3)
+        ili9488.line(self.center_x, self.center_y, end_x, end_y, color)
+        ili9488.set_line_thickness(1)
+        
+        # Draw tail (opposite direction, shorter, darker)
+        tail_angle = screen_angle + 180
+        if tail_angle >= 360:
+            tail_angle -= 360
+        tail_length = int(self.radius * 0.25)
+        tail_x, tail_y = self._angle_to_point(tail_angle, tail_length)
+        tail_color = _darken_color(color, 0.5)
+        
+        ili9488.set_line_thickness(2)
+        ili9488.line(self.center_x, self.center_y, tail_x, tail_y, tail_color)
+        ili9488.set_line_thickness(1)
+        
+        # Draw center cap
+        cap_radius = 5
+        ili9488.circle(self.center_x, self.center_y, cap_radius, 
+                      _darken_color(color, 0.6), color)
+        
+        return screen_angle
+    
+    def erase_needle(self, screen_angle):
+        """Erase the needle at the specified screen angle."""
+        # Erase main needle
+        needle_length = int(self.radius * 0.7)
+        end_x, end_y = self._angle_to_point(screen_angle, needle_length)
+        
+        ili9488.set_line_thickness(4)
+        ili9488.line(self.center_x, self.center_y, end_x, end_y, self.bg_color)
+        
+        # Erase tail
+        tail_angle = screen_angle + 180
+        if tail_angle >= 360:
+            tail_angle -= 360
+        tail_length = int(self.radius * 0.25)
+        tail_x, tail_y = self._angle_to_point(tail_angle, tail_length)
+        
+        ili9488.set_line_thickness(3)
+        ili9488.line(self.center_x, self.center_y, tail_x, tail_y, self.bg_color)
+        ili9488.set_line_thickness(1)
+    
+    def draw(self):
+        """Draw the complete compass."""
+        if not self.visible:
+            return
+        
+        self.draw_bezel()
+        self.draw_degree_marks()
+        self.draw_cardinal_points()
+        self.last_needle_angle = self.draw_needle(self.heading)
+    
+    def set_heading(self, heading):
+        """Update the compass to show a new heading (0-360 degrees).
+        
+        Args:
+            heading: Compass heading in degrees (0=North, 90=East, 180=South, 270=West)
+        """
+        # Normalize heading to 0-360
+        while heading < 0:
+            heading += 360
+        while heading >= 360:
+            heading -= 360
+        
+        if heading == self.heading:
+            return
+        
+        # Erase old needle if it was drawn
+        if self.last_needle_angle is not None:
+            self.erase_needle(self.last_needle_angle)
+            # Redraw any marks that might have been erased
+            self.draw_degree_marks()
+            self.draw_cardinal_points()
+        
+        # Draw new needle
+        self.heading = heading
+        self.last_needle_angle = self.draw_needle(heading)
+        
+        # Update display
+        self.update()
+    
+    def rotate_to(self, target_heading, steps=20, delay_ms=30):
+        """Smoothly animate the compass needle to a target heading.
+        
+        Takes the shortest path around the circle.
+        
+        Args:
+            target_heading: The heading to rotate to (0-360)
+            steps: Number of intermediate steps
+            delay_ms: Delay between steps in milliseconds
+        """
+        import time
+        
+        # Normalize target
+        while target_heading < 0:
+            target_heading += 360
+        while target_heading >= 360:
+            target_heading -= 360
+        
+        # Calculate shortest rotation direction
+        diff = target_heading - self.heading
+        
+        # Normalize diff to -180 to 180
+        if diff > 180:
+            diff -= 360
+        elif diff < -180:
+            diff += 360
+        
+        step_size = diff / steps
+        
+        for i in range(steps + 1):
+            heading = self.heading + (step_size * i)
+            self.set_heading(heading)
+            time.sleep_ms(delay_ms)
