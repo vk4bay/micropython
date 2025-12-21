@@ -1313,3 +1313,211 @@ class ListView(Widget):
             y = self.y + i * item_height - self.scroll_offset
             self._draw_item(i, y)
    
+
+
+#Next level,  might be pushing it
+
+class LineChart(Widget):
+    """Real-time line chart widget for plotting data over time.
+    
+    Displays a scrolling line chart with optional grid lines, axis labels,
+    and automatic scaling. Useful for sensor data visualization, performance
+    monitoring, etc.
+    
+    Args:
+        x, y: Top-left corner position
+        width, height: Chart dimensions
+        max_points: Maximum number of data points to display
+        min_val: Minimum Y-axis value (None for auto-scale)
+        max_val: Maximum Y-axis value (None for auto-scale)
+        line_color: Color of the data line
+        bg_color: Background color
+        grid_color: Grid line color (None to disable grid)
+        axis_color: Axis color
+        show_labels: Whether to show axis labels
+    """
+    
+    def __init__(self, x, y, width, height, max_points=100,
+                 min_val=None, max_val=None,
+                 line_color=COLOR_BTN_PRIMARY, bg_color=COLOR_BLACK,
+                 grid_color=COLOR_GRAY_DARK, axis_color=COLOR_WHITE,
+                 show_labels=True, show_grid=True):
+        super().__init__(x, y, width, height)
+        self.data_points = []
+        self.max_points = max_points
+        self.min_val = min_val
+        self.max_val = max_val
+        self.line_color = line_color
+        self.bg_color = bg_color
+        self.grid_color = grid_color
+        self.axis_color = axis_color
+        self.show_labels = show_labels
+        self.show_grid = show_grid
+        
+        # Auto-scaling ranges
+        self.auto_min = 0
+        self.auto_max = 100
+        
+        # Chart area (leave space for labels if enabled)
+        self.chart_padding = 25 if show_labels else 5
+        self.chart_x = x + self.chart_padding
+        self.chart_y = y + 5
+        self.chart_width = width - self.chart_padding - 5
+        self.chart_height = height - 10
+    
+    def _calculate_auto_range(self):
+        """Calculate automatic min/max based on current data."""
+        if not self.data_points:
+            self.auto_min = 0
+            self.auto_max = 100
+            return
+        
+        data_min = min(self.data_points)
+        data_max = max(self.data_points)
+        
+        # Add 10% padding for better visualization
+        range_size = data_max - data_min
+        if range_size == 0:
+            range_size = abs(data_max) * 0.1 or 1
+        
+        padding = range_size * 0.1
+        self.auto_min = data_min - padding
+        self.auto_max = data_max + padding
+    
+    def _value_to_y(self, value):
+        y_min = self.min_val if self.min_val is not None else self.auto_min
+        y_max = self.max_val if self.max_val is not None else self.auto_max
+        
+        if y_max == y_min:
+            return self.chart_y + self.chart_height // 2
+        
+        proportion = (value - y_min) / (y_max - y_min)
+        y = self.chart_y + self.chart_height - int(proportion * self.chart_height)
+        
+        return y
+    
+    def _index_to_x(self, index):
+        if len(self.data_points) <= 1:
+            return self.chart_x
+        
+        x_step = self.chart_width / (self.max_points - 1)
+        x = self.chart_x + int(index * x_step)
+        
+        return x
+    
+    def draw_grid(self):
+        if not self.show_grid or self.grid_color is None:
+            return
+        
+        num_h_lines = 5
+        for i in range(num_h_lines):
+            y = self.chart_y + int(i * self.chart_height / (num_h_lines - 1))
+            ili9488.line(self.chart_x, y, 
+                        self.chart_x + self.chart_width - 1, y,
+                        self.grid_color)
+        
+        if len(self.data_points) > 1:
+            v_step = max(1, self.max_points // 10)
+            for i in range(0, self.max_points, v_step):
+                if i >= len(self.data_points):
+                    break
+                x = self._index_to_x(i)
+                ili9488.line(x, self.chart_y,
+                           x, self.chart_y + self.chart_height - 1,
+                           self.grid_color)
+    
+    def draw_axes(self):
+        # Y axis (left)
+        ili9488.line(self.chart_x, self.chart_y,
+                    self.chart_x, self.chart_y + self.chart_height - 1,
+                    self.axis_color)
+        
+        # X axis (bottom)
+        ili9488.line(self.chart_x, self.chart_y + self.chart_height - 1,
+                    self.chart_x + self.chart_width - 1, 
+                    self.chart_y + self.chart_height - 1,
+                    self.axis_color)
+    
+    def draw_labels(self):
+        if not self.show_labels:
+            return
+        
+        y_min = self.min_val if self.min_val is not None else self.auto_min
+        y_max = self.max_val if self.max_val is not None else self.auto_max
+        
+        label_font = FONT_SMALL
+        
+        max_text = f"{int(y_max)}"
+        ili9488.text(self.x + 2, self.chart_y, max_text, 
+                    self.axis_color, self.bg_color, label_font)
+        
+        min_text = f"{int(y_min)}"
+        ili9488.text(self.x + 2, 
+                    self.chart_y + self.chart_height - 8, 
+                    min_text, self.axis_color, self.bg_color, label_font)
+    
+    def draw_line(self):
+        if len(self.data_points) < 2:
+            if len(self.data_points) == 1:
+                x = self._index_to_x(0)
+                y = self._value_to_y(self.data_points[0])
+                ili9488.circle(x, y, 2, self.line_color, self.line_color)
+            return
+
+        #HACK: Need to hold line thickness state or we'll break other calls
+                
+        old_thickness = ili9488.get_line_thickness()
+        ili9488.set_line_thickness(2)
+        
+        for i in range(len(self.data_points) - 1):
+            x1 = self._index_to_x(i)
+            y1 = self._value_to_y(self.data_points[i])
+            x2 = self._index_to_x(i + 1)
+            y2 = self._value_to_y(self.data_points[i + 1])
+            
+            if (self.chart_x <= x1 <= self.chart_x + self.chart_width and
+                self.chart_x <= x2 <= self.chart_x + self.chart_width):
+                ili9488.line(x1, y1, x2, y2, self.line_color)
+        
+        ili9488.set_line_thickness(old_thickness)
+    
+    def draw(self):
+        if not self.visible:
+            return
+        
+        if self.min_val is None or self.max_val is None:
+            self._calculate_auto_range()
+        
+        ili9488.rect(self.x, self.y, self.width, self.height,
+                    self.bg_color, self.bg_color)
+        
+        self.draw_grid()
+        self.draw_axes()
+        self.draw_labels()
+        self.draw_line()
+    
+    def add_point(self, value):
+        self.data_points.append(value)
+        
+        if len(self.data_points) > self.max_points:
+            self.data_points.pop(0)
+        
+        self.draw()
+        self.update()
+    
+    def clear(self):
+        self.data_points = []
+        self.draw()
+        self.update()
+    
+    def set_data(self, data):
+        
+        self.data_points = list(data[-self.max_points:])
+        self.draw()
+        self.update()
+    
+    def set_range(self, min_val, max_val):
+        self.min_val = min_val
+        self.max_val = max_val
+        self.draw()
+        self.update()
