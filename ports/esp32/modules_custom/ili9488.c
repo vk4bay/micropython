@@ -1104,8 +1104,11 @@ static void render_text_custom_font(int x, int y, const char *text, uint32_t col
             continue;
         }
 
+        char ch_str[2] = {(char)ch, '\0'};
+        mp_obj_t ch_obj = mp_obj_new_str(ch_str, 1);
+
         // Get character data: get_ch(ch) returns (buffer, width, height)
-        mp_obj_t char_data = mp_call_function_1(get_ch_func, MP_OBJ_NEW_SMALL_INT(ch));
+        mp_obj_t char_data = mp_call_function_1(get_ch_func, ch_obj);
 
         // Unpack tuple: (buffer, width, height)
         mp_obj_t *items;
