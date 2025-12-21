@@ -84,26 +84,6 @@ static void ili9488_write_data(uint8_t *data, size_t len)
     spi_device_polling_transmit(spi_device, &t);
 }
 
-// Helper: Send large data using DMA (data must be in DMA-capable memory)
-static void ili9488_write_data_dma(const uint8_t *data, size_t len)
-{
-    if (len == 0)
-        return;
-
-    gpio_set_level(dc_pin, 1);
-
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = len * 8;
-    t.tx_buffer = data;
-
-    esp_err_t ret = spi_device_transmit(spi_device, &t);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "DMA transfer failed: %d", ret);
-    }
-}
-
 // Helper: Set address window
 static void ili9488_set_window(int x0, int y0, int x1, int y1)
 {
@@ -819,7 +799,6 @@ static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args)
     int y1 = mp_obj_get_int(args[3]);
     int x2 = mp_obj_get_int(args[4]);
     int y2 = mp_obj_get_int(args[5]);
-    uint32_t color = mp_obj_get_int(args[6]);
     uint32_t fill_color = (n_args > 7) ? mp_obj_get_int(args[7]) : COLOR_NONE;
 
     if (!framebuffer)
@@ -1103,15 +1082,14 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_arc_obj, 6, 6, ili9488_arc);
 // Helper function to render text using custom Python font
 static void render_text_custom_font(int x, int y, const char *text, uint32_t color, uint32_t bg_color)
 {
+    mp_printf(&mp_plat_print, "ILI9488: Rendering custom font text\n");
+    mp_printf(&mp_plat_print, "ILI9488: Custom font object: %p\n", custom_font);
+
     // Get font functions using string literals
     qstr get_ch_qstr = qstr_from_str("get_ch");
-    qstr height_qstr = qstr_from_str("height");
 
     mp_obj_t get_ch_func = mp_load_attr(custom_font, get_ch_qstr);
-    mp_obj_t height_func = mp_load_attr(custom_font, height_qstr);
-
-    // Get font height
-    int font_height = mp_obj_get_int(mp_call_function_0(height_func));
+    mp_printf(&mp_plat_print, "ILI9488: get_ch function object: %p\n", get_ch_func);
 
     int cursor_x = x;
 
@@ -1218,7 +1196,6 @@ static mp_obj_t ili9488_text(size_t n_args, const mp_obj_t *args)
     }
 
     int char_width = 8 * size;
-    int char_height = 8 * size;
     int cursor_x = x;
 
     // Render each character

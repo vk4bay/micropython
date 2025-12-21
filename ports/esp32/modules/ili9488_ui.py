@@ -1001,8 +1001,10 @@ class Compass(Widget):
             
             # Draw label indicator (small circle for now, would be text with font support)
             label_x, label_y = self._angle_to_point(screen_angle, self.radius - 22)
-            ili9488.circle(label_x, label_y, 3, label_color, label_color)
-    
+            font = FONT_MEDIUM
+            if(self.radius < 30):
+                font = FONT_SMALL
+            ili9488.text(label_x - 4, label_y - 4, label, label_color, self.bg_color, font)
     def draw_degree_marks(self):
         """Draw degree tick marks around the compass."""
         if not self.show_degrees:
