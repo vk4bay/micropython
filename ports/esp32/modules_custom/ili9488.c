@@ -1082,15 +1082,8 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_arc_obj, 6, 6, ili9488_arc);
 // Helper function to render text using custom Python font
 static void render_text_custom_font(int x, int y, const char *text, uint32_t color, uint32_t bg_color)
 {
-    mp_printf(&mp_plat_print, "ILI9488: Rendering custom font text\n");
-    mp_printf(&mp_plat_print, "ILI9488: Custom font object: %p\n", custom_font);
-
-    // Get font functions using string literals
     qstr get_ch_qstr = qstr_from_str("get_ch");
-
     mp_obj_t get_ch_func = mp_load_attr(custom_font, get_ch_qstr);
-    mp_printf(&mp_plat_print, "ILI9488: get_ch function object: %p\n", get_ch_func);
-
     int cursor_x = x;
 
     // Render each character
