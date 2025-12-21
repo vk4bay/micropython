@@ -1504,6 +1504,30 @@ class LineChart(Widget):
         
         self.draw()
         self.update()
+
+    def add_point_fast(self, value):
+        """Add point with incremental drawing (faster)."""
+        old_len = len(self.data_points)
+        
+        self.data_points.append(value)
+        if len(self.data_points) > self.max_points:
+            self.data_points.pop(0)
+            # Full redraw needed when scrolling
+            self.draw()
+        else:
+            # Just draw new segment
+            if old_len >= 1:
+                x1 = self._index_to_x(old_len - 1)
+                y1 = self._value_to_y(self.data_points[old_len - 1])
+                x2 = self._index_to_x(old_len)
+                y2 = self._value_to_y(value)
+                
+                old_thickness = ili9488.get_line_thickness()
+                ili9488.set_line_thickness(2)
+                ili9488.line(x1, y1, x2, y2, self.line_color)
+                ili9488.set_line_thickness(old_thickness)
+    
+        self.update()
     
     def clear(self):
         self.data_points = []
