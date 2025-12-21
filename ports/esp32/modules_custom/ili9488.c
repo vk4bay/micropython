@@ -1107,10 +1107,11 @@ static void render_text_custom_font(int x, int y, const char *text, uint32_t col
         char ch_str[2] = {(char)ch, '\0'};
         mp_obj_t ch_obj = mp_obj_new_str(ch_str, 1);
 
-        // Get character data: get_ch(ch) returns (buffer, width, height)
+        // Get character data: get_ch(ch) returns (buffer, height, width)
+        // Note: font_to_py format returns HEIGHT first, then WIDTH
         mp_obj_t char_data = mp_call_function_1(get_ch_func, ch_obj);
 
-        // Unpack tuple: (buffer, width, height)
+        // Unpack tuple: (buffer, height, width)
         mp_obj_t *items;
         size_t len;
         mp_obj_get_array(char_data, &len, &items);
@@ -1120,25 +1121,27 @@ static void render_text_custom_font(int x, int y, const char *text, uint32_t col
             continue; // Invalid data
         }
 
-        // Get buffer, width, and height
+        // Get buffer, height (items[1]), and width (items[2])
         mp_buffer_info_t bufinfo;
         mp_get_buffer_raise(items[0], &bufinfo, MP_BUFFER_READ);
-        int char_width = mp_obj_get_int(items[1]);
-        int char_height = mp_obj_get_int(items[2]);
+        int char_height = mp_obj_get_int(items[1]); // HEIGHT is second
+        int char_width = mp_obj_get_int(items[2]);  // WIDTH is third
 
         const uint8_t *glyph_data = (const uint8_t *)bufinfo.buf;
 
         // Draw character
+        int bytes_per_row = (char_width + 7) / 8;
+
         for (int py = 0; py < char_height; py++)
         {
             for (int px = 0; px < char_width; px++)
             {
-                // Calculate byte and bit position
-                int byte_pos = (py * char_width + px) / 8;
-                int bit_pos = (py * char_width + px) % 8;
+                // Calculate byte and bit position (row-by-row layout)
+                int byte_pos = py * bytes_per_row + px / 8;
+                int bit_pos = px % 8;
 
-                // Check if pixel is set
-                bool pixel_set = (glyph_data[byte_pos] & (1 << bit_pos)) != 0;
+                // Check if pixel is set (MSB-first bit order)
+                bool pixel_set = (glyph_data[byte_pos] & (0x80 >> bit_pos)) != 0;
 
                 int screen_x = cursor_x + px;
                 int screen_y = y + py;
