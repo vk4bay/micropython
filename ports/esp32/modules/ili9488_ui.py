@@ -22,6 +22,7 @@ Usage:
 """
 
 import ili9488
+import time
 
 # Color constants (RGB888 format)
 COLOR_BLACK = 0x000000
@@ -1169,3 +1170,146 @@ class Compass(Widget):
             heading = start_heading + (step_size * i)  
             self.set_heading(heading)
             time.sleep_ms(delay_ms)
+
+class HBoxLayout(Widget):
+    """Horizontal box layout."""
+    def __init__(self, x, y, width, height, spacing=5):
+        super().__init__(x, y, width, height)
+        self.children = []
+        self.spacing = spacing
+    
+    def add_child(self, widget, stretch=1):
+        self.children.append((widget, stretch))
+        self._layout()
+    
+    def _layout(self):
+        total_stretch = sum(s for _, s in self.children)
+        available = self.width - (len(self.children) - 1) * self.spacing
+        x = self.x
+        
+        for widget, stretch in self.children:
+            w = int(available * stretch / total_stretch)
+            widget.x = x
+            widget.y = self.y
+            widget.width = w
+            widget.height = self.height
+            x += w + self.spacing
+
+class Screen:
+    def __init__(self, name):
+        self.name = name
+        self.widgets = []
+        
+    def on_enter(self):
+        pass
+        
+    def on_exit(self):
+        pass
+        
+    def draw(self):
+        for widget in self.widgets:
+            if widget.visible:
+                widget.draw()
+
+class ScreenManager:
+    def __init__(self, display):
+        self.display = display
+        self.screens = {}
+        self.current_screen = None
+        self.screen_history = []  # Track navigation history
+        self.max_history = 10    
+    def add_screen(self, screen):
+        self.screens[screen.name] = screen
+    
+    def goto_screen(self, name, transition=None,  add_to_history=True):
+        if name not in self.screens:
+            raise ValueError(f"Screen '{name}' not found")
+        
+        old_screen = self.current_screen
+        new_screen = self.screens[name]
+        
+        # Add current screen to history before switching
+        if add_to_history and old_screen:
+            self.screen_history.append(old_screen.name)
+            # Limit history size
+            if len(self.screen_history) > self.max_history:
+                self.screen_history.pop(0)
+        
+        if old_screen:
+            old_screen.on_exit()
+        
+        if transition:
+            transition.animate(old_screen, new_screen)
+        else:
+            self.display.fill(0x000000)
+        
+        self.current_screen = new_screen
+        new_screen.draw()
+        ili9488.show()
+        new_screen.on_enter()      
+    
+    def go_back(self, transition=None):
+        if not self.screen_history:
+            return False  # No history
+        
+        previous_name = self.screen_history.pop()
+        self.goto_screen(previous_name, transition=transition, 
+                        add_to_history=False)  # Don't re-add to history
+        return True      
+    
+    def clear_history(self):
+        self.screen_history = []
+
+    #last minute helpers, TODO: Paul to implement tests
+    def get_current_screen(self):
+        return self.current_screen
+
+    def get_screen(self, name):
+        return self.screens.get(name)
+
+    def has_screen(self, name):
+        return name in self.screens    
+
+class Transition:
+    def animate(self, old_screen, new_screen):
+        """Override in subclasses to implement transition effect.
+        
+        Args:
+            old_screen: Screen being left (may be None)
+            new_screen: Screen being entered
+        """
+        pass
+
+class Slider(Widget):
+    """Horizontal or vertical slider."""
+    def __init__(self, x, y, width, height, min_val=0, max_val=100,
+                 orientation='horizontal'):
+        self.value = min_val
+        self.dragging = False
+    
+    def on_touch(self, touch):
+        if touch.pressed:
+            # Calculate value from touch position
+            if self.orientation == 'horizontal':
+                proportion = (touch.x - self.x) / self.width
+            else:
+                proportion = (touch.y - self.y) / self.height
+            self.value = self.min_val + proportion * (self.max_val - self.min_val)
+
+class ListView(Widget):
+    """Scrollable list of items."""
+    def __init__(self, x, y, width, height, items=[]):
+        self.items = items
+        self.scroll_offset = 0
+        self.selected_index = -1
+    
+    def draw(self):
+        # Draw visible items with clipping
+        item_height = 30
+        visible_start = self.scroll_offset // item_height
+        visible_end = (self.scroll_offset + self.height) // item_height
+        
+        for i in range(visible_start, min(visible_end + 1, len(self.items))):
+            y = self.y + i * item_height - self.scroll_offset
+            self._draw_item(i, y)
+   
