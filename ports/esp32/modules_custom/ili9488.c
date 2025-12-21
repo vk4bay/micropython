@@ -84,26 +84,6 @@ static void ili9488_write_data(uint8_t *data, size_t len)
     spi_device_polling_transmit(spi_device, &t);
 }
 
-// Helper: Send large data using DMA (data must be in DMA-capable memory)
-static void ili9488_write_data_dma(const uint8_t *data, size_t len)
-{
-    if (len == 0)
-        return;
-
-    gpio_set_level(dc_pin, 1);
-
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = len * 8;
-    t.tx_buffer = data;
-
-    esp_err_t ret = spi_device_transmit(spi_device, &t);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "DMA transfer failed: %d", ret);
-    }
-}
-
 // Helper: Set address window
 static void ili9488_set_window(int x0, int y0, int x1, int y1)
 {
@@ -819,7 +799,6 @@ static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args)
     int y1 = mp_obj_get_int(args[3]);
     int x2 = mp_obj_get_int(args[4]);
     int y2 = mp_obj_get_int(args[5]);
-    uint32_t color = mp_obj_get_int(args[6]);
     uint32_t fill_color = (n_args > 7) ? mp_obj_get_int(args[7]) : COLOR_NONE;
 
     if (!framebuffer)
@@ -1007,19 +986,104 @@ static const uint8_t font_8x8[96][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}  // DEL
 };
 
+// Draw arc (partial circle)
+// Args: center_x, center_y, radius, start_angle_deg, end_angle_deg, color
+// Angles in degrees: 0=right, 90=down, 180=left, 270=up (standard screen coordinates)
+static mp_obj_t ili9488_arc(size_t n_args, const mp_obj_t *args)
+{
+    int x0 = mp_obj_get_int(args[0]);
+    int y0 = mp_obj_get_int(args[1]);
+    int r = mp_obj_get_int(args[2]);
+    float start_angle = mp_obj_get_float(args[3]);
+    float end_angle = mp_obj_get_float(args[4]);
+    uint32_t color = mp_obj_get_int(args[5]);
+
+    if (!framebuffer)
+        return mp_const_none;
+
+    // Normalize angles to 0-360 range
+    while (start_angle < 0)
+        start_angle += 360.0f;
+    while (start_angle >= 360.0f)
+        start_angle -= 360.0f;
+    while (end_angle < 0)
+        end_angle += 360.0f;
+    while (end_angle >= 360.0f)
+        end_angle -= 360.0f;
+
+    // Use Bresenham's circle algorithm but only draw points in angle range
+    int x = r;
+    int y = 0;
+    int err = 0;
+
+    while (x >= y)
+    {
+        // Calculate angles for all 8 octants
+        struct
+        {
+            int px, py;
+        } points[8] = {
+            {x0 + x, y0 + y}, // Octant 0
+            {x0 + y, y0 + x}, // Octant 1
+            {x0 - y, y0 + x}, // Octant 2
+            {x0 - x, y0 + y}, // Octant 3
+            {x0 - x, y0 - y}, // Octant 4
+            {x0 - y, y0 - x}, // Octant 5
+            {x0 + y, y0 - x}, // Octant 6
+            {x0 + x, y0 - y}  // Octant 7
+        };
+
+        // Check and draw each point if it's in the angle range
+        for (int i = 0; i < 8; i++)
+        {
+            int dx = points[i].px - x0;
+            int dy = points[i].py - y0;
+
+            // Calculate angle in degrees (atan2 returns radians)
+            // atan2(dy, dx) gives angle from -π to π
+            float angle = atan2f((float)dy, (float)dx) * 180.0f / M_PI;
+            if (angle < 0)
+                angle += 360.0f;
+
+            // Check if angle is within the arc range (handles wraparound)
+            bool in_range;
+            if (start_angle <= end_angle)
+            {
+                in_range = (angle >= start_angle && angle <= end_angle);
+            }
+            else
+            {
+                // Wraparound case (e.g., 350 to 10 degrees)
+                in_range = (angle >= start_angle || angle <= end_angle);
+            }
+
+            if (in_range)
+            {
+                set_pixel_fb(points[i].px, points[i].py, color);
+            }
+        }
+
+        if (err <= 0)
+        {
+            y += 1;
+            err += 2 * y + 1;
+        }
+        if (err > 0)
+        {
+            x -= 1;
+            err -= 2 * x + 1;
+        }
+    }
+
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_arc_obj, 6, 6, ili9488_arc);
+
 // Helper function to render text using custom Python font
 static void render_text_custom_font(int x, int y, const char *text, uint32_t color, uint32_t bg_color)
 {
-    // Get font functions using string literals
     qstr get_ch_qstr = qstr_from_str("get_ch");
-    qstr height_qstr = qstr_from_str("height");
-
     mp_obj_t get_ch_func = mp_load_attr(custom_font, get_ch_qstr);
-    mp_obj_t height_func = mp_load_attr(custom_font, height_qstr);
-
-    // Get font height
-    int font_height = mp_obj_get_int(mp_call_function_0(height_func));
-
     int cursor_x = x;
 
     // Render each character
@@ -1033,10 +1097,14 @@ static void render_text_custom_font(int x, int y, const char *text, uint32_t col
             continue;
         }
 
-        // Get character data: get_ch(ch) returns (buffer, width, height)
-        mp_obj_t char_data = mp_call_function_1(get_ch_func, MP_OBJ_NEW_SMALL_INT(ch));
+        char ch_str[2] = {(char)ch, '\0'};
+        mp_obj_t ch_obj = mp_obj_new_str(ch_str, 1);
 
-        // Unpack tuple: (buffer, width, height)
+        // Get character data: get_ch(ch) returns (buffer, height, width)
+        // Note: font_to_py format returns HEIGHT first, then WIDTH
+        mp_obj_t char_data = mp_call_function_1(get_ch_func, ch_obj);
+
+        // Unpack tuple: (buffer, height, width)
         mp_obj_t *items;
         size_t len;
         mp_obj_get_array(char_data, &len, &items);
@@ -1046,25 +1114,27 @@ static void render_text_custom_font(int x, int y, const char *text, uint32_t col
             continue; // Invalid data
         }
 
-        // Get buffer, width, and height
+        // Get buffer, height (items[1]), and width (items[2])
         mp_buffer_info_t bufinfo;
         mp_get_buffer_raise(items[0], &bufinfo, MP_BUFFER_READ);
-        int char_width = mp_obj_get_int(items[1]);
-        int char_height = mp_obj_get_int(items[2]);
+        int char_height = mp_obj_get_int(items[1]); // HEIGHT is second
+        int char_width = mp_obj_get_int(items[2]);  // WIDTH is third
 
         const uint8_t *glyph_data = (const uint8_t *)bufinfo.buf;
 
         // Draw character
+        int bytes_per_row = (char_width + 7) / 8;
+
         for (int py = 0; py < char_height; py++)
         {
             for (int px = 0; px < char_width; px++)
             {
-                // Calculate byte and bit position
-                int byte_pos = (py * char_width + px) / 8;
-                int bit_pos = (py * char_width + px) % 8;
+                // Calculate byte and bit position (row-by-row layout)
+                int byte_pos = py * bytes_per_row + px / 8;
+                int bit_pos = px % 8;
 
-                // Check if pixel is set
-                bool pixel_set = (glyph_data[byte_pos] & (1 << bit_pos)) != 0;
+                // Check if pixel is set (MSB-first bit order)
+                bool pixel_set = (glyph_data[byte_pos] & (0x80 >> bit_pos)) != 0;
 
                 int screen_x = cursor_x + px;
                 int screen_y = y + py;
@@ -1125,7 +1195,6 @@ static mp_obj_t ili9488_text(size_t n_args, const mp_obj_t *args)
     }
 
     int char_width = 8 * size;
-    int char_height = 8 * size;
     int cursor_x = x;
 
     // Render each character
@@ -1543,6 +1612,7 @@ static const mp_rom_map_elem_t ili9488_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_get_line_thickness), MP_ROM_PTR(&ili9488_get_line_thickness_obj)},
     {MP_ROM_QSTR(MP_QSTR_rect), MP_ROM_PTR(&ili9488_rect_obj)},
     {MP_ROM_QSTR(MP_QSTR_circle), MP_ROM_PTR(&ili9488_circle_obj)},
+    {MP_ROM_QSTR(MP_QSTR_arc), MP_ROM_PTR(&ili9488_arc_obj)},
     {MP_ROM_QSTR(MP_QSTR_triangle), MP_ROM_PTR(&ili9488_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&ili9488_text_obj)},
     {MP_ROM_QSTR(MP_QSTR_set_font), MP_ROM_PTR(&ili9488_set_font_obj)},

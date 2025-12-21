@@ -29,6 +29,7 @@
 extern mp_obj_t ili9488_rect(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t ili9488_line(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t ili9488_circle(size_t n_args, const mp_obj_t *args);
+extern mp_obj_t ili9488_arc(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t ili9488_update_region(size_t n_args, const mp_obj_t *args);
 extern mp_obj_t ili9488_fill(mp_obj_t color_obj);
 extern mp_obj_t ili9488_get_width(void);
