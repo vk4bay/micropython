@@ -718,6 +718,83 @@ static mp_obj_t ili9488_triangle(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_triangle_obj, 7, 8, ili9488_triangle);
 
+// Draw arc (partial circle)
+// Args: center_x, center_y, radius, start_angle_deg, end_angle_deg, color
+// Angles in degrees: 0=right, 90=down, 180=left, 270=up (standard screen coordinates)
+static mp_obj_t ili9488_arc(size_t n_args, const mp_obj_t *args) {
+    int x0 = mp_obj_get_int(args[0]);
+    int y0 = mp_obj_get_int(args[1]);
+    int r = mp_obj_get_int(args[2]);
+    float start_angle = mp_obj_get_float(args[3]);
+    float end_angle = mp_obj_get_float(args[4]);
+    uint32_t color = mp_obj_get_int(args[5]);
+
+    if (!framebuffer) return mp_const_none;
+
+    // Normalize angles to 0-360 range
+    while (start_angle < 0) start_angle += 360.0f;
+    while (start_angle >= 360.0f) start_angle -= 360.0f;
+    while (end_angle < 0) end_angle += 360.0f;
+    while (end_angle >= 360.0f) end_angle -= 360.0f;
+
+    // Use Bresenham's circle algorithm but only draw points in angle range
+    int x = r;
+    int y = 0;
+    int err = 0;
+
+    while (x >= y) {
+        // Calculate angles for all 8 octants
+        struct {
+            int px, py;
+        } points[8] = {
+            {x0 + x, y0 + y},  // Octant 0
+            {x0 + y, y0 + x},  // Octant 1
+            {x0 - y, y0 + x},  // Octant 2
+            {x0 - x, y0 + y},  // Octant 3
+            {x0 - x, y0 - y},  // Octant 4
+            {x0 - y, y0 - x},  // Octant 5
+            {x0 + y, y0 - x},  // Octant 6
+            {x0 + x, y0 - y}   // Octant 7
+        };
+
+        // Check and draw each point if it's in the angle range
+        for (int i = 0; i < 8; i++) {
+            int dx = points[i].px - x0;
+            int dy = points[i].py - y0;
+            
+            // Calculate angle in degrees (atan2 returns radians)
+            // atan2(dy, dx) gives angle from -π to π
+            float angle = atan2f((float)dy, (float)dx) * 180.0f / M_PI;
+            if (angle < 0) angle += 360.0f;
+
+            // Check if angle is within the arc range (handles wraparound)
+            bool in_range;
+            if (start_angle <= end_angle) {
+                in_range = (angle >= start_angle && angle <= end_angle);
+            } else {
+                // Wraparound case (e.g., 350 to 10 degrees)
+                in_range = (angle >= start_angle || angle <= end_angle);
+            }
+
+            if (in_range) {
+                set_pixel_fb(points[i].px, points[i].py, color);
+            }
+        }
+
+        if (err <= 0) {
+            y += 1;
+            err += 2 * y + 1;
+        }
+        if (err > 0) {
+            x -= 1;
+            err -= 2 * x + 1;
+        }
+    }
+
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(ili9488_arc_obj, 6, 6, ili9488_arc);
+
 typedef struct {
     mp_obj_base_t base;
     uint8_t *pixels;
@@ -1015,6 +1092,7 @@ static const mp_rom_map_elem_t ili9488_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_get_line_thickness), MP_ROM_PTR(&ili9488_get_line_thickness_obj) },
     { MP_ROM_QSTR(MP_QSTR_rect), MP_ROM_PTR(&ili9488_rect_obj) },
     { MP_ROM_QSTR(MP_QSTR_circle), MP_ROM_PTR(&ili9488_circle_obj) },
+    { MP_ROM_QSTR(MP_QSTR_arc), MP_ROM_PTR(&ili9488_arc_obj) },
     { MP_ROM_QSTR(MP_QSTR_triangle), MP_ROM_PTR(&ili9488_triangle_obj) },
     { MP_ROM_QSTR(MP_QSTR_show), MP_ROM_PTR(&ili9488_show_obj) },
     { MP_ROM_QSTR(MP_QSTR_update_region), MP_ROM_PTR(&ili9488_update_region_obj) },
