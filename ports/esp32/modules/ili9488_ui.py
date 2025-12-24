@@ -22,6 +22,7 @@ Usage:
 """
 
 import ili9488
+import time
 
 # Color constants (RGB888 format)
 COLOR_BLACK = 0x000000
@@ -1169,3 +1170,401 @@ class Compass(Widget):
             heading = start_heading + (step_size * i)  
             self.set_heading(heading)
             time.sleep_ms(delay_ms)
+
+class HBoxLayout(Widget):
+    """Horizontal box layout."""
+    def __init__(self, x, y, width, height, spacing=5):
+        super().__init__(x, y, width, height)
+        self.children = []
+        self.spacing = spacing
+    
+    def add_child(self, widget, stretch=1):
+        self.children.append((widget, stretch))
+        self._layout()
+    
+    def _layout(self):
+        total_stretch = sum(s for _, s in self.children)
+        available = self.width - (len(self.children) - 1) * self.spacing
+        x = self.x
+        
+        for widget, stretch in self.children:
+            w = int(available * stretch / total_stretch)
+            widget.x = x
+            widget.y = self.y
+            widget.width = w
+            widget.height = self.height
+            x += w + self.spacing
+
+class Screen:
+    def __init__(self, name):
+        self.name = name
+        self.widgets = []
+        
+    def on_enter(self):
+        pass
+        
+    def on_exit(self):
+        pass
+        
+    def draw(self):
+        for widget in self.widgets:
+            if widget.visible:
+                widget.draw()
+
+class ScreenManager:
+    def __init__(self, display):
+        self.display = display
+        self.screens = {}
+        self.current_screen = None
+        self.screen_history = []  # Track navigation history
+        self.max_history = 10    
+    def add_screen(self, screen):
+        self.screens[screen.name] = screen
+    
+    def goto_screen(self, name, transition=None,  add_to_history=True):
+        if name not in self.screens:
+            raise ValueError(f"Screen '{name}' not found")
+        
+        old_screen = self.current_screen
+        new_screen = self.screens[name]
+        
+        # Add current screen to history before switching
+        if add_to_history and old_screen:
+            self.screen_history.append(old_screen.name)
+            # Limit history size
+            if len(self.screen_history) > self.max_history:
+                self.screen_history.pop(0)
+        
+        if old_screen:
+            old_screen.on_exit()
+        
+        if transition:
+            transition.animate(old_screen, new_screen)
+        else:
+            self.display.fill(0x000000)
+        
+        self.current_screen = new_screen
+        new_screen.draw()
+        ili9488.show()
+        new_screen.on_enter()      
+    
+    def go_back(self, transition=None):
+        if not self.screen_history:
+            return False  # No history
+        
+        previous_name = self.screen_history.pop()
+        self.goto_screen(previous_name, transition=transition, 
+                        add_to_history=False)  # Don't re-add to history
+        return True      
+    
+    def clear_history(self):
+        self.screen_history = []
+
+    #last minute helpers, TODO: Paul to implement tests
+    def get_current_screen(self):
+        return self.current_screen
+
+    def get_screen(self, name):
+        return self.screens.get(name)
+
+    def has_screen(self, name):
+        return name in self.screens    
+
+class Transition:
+    def animate(self, old_screen, new_screen):
+        """Override in subclasses to implement transition effect.
+        
+        Args:
+            old_screen: Screen being left (may be None)
+            new_screen: Screen being entered
+        """
+        pass
+
+class Slider(Widget):
+    """Horizontal or vertical slider."""
+    def __init__(self, x, y, width, height, min_val=0, max_val=100,
+                 orientation='horizontal'):
+        self.value = min_val
+        self.dragging = False
+    
+    def on_touch(self, touch):
+        if touch.pressed:
+            # Calculate value from touch position
+            if self.orientation == 'horizontal':
+                proportion = (touch.x - self.x) / self.width
+            else:
+                proportion = (touch.y - self.y) / self.height
+            self.value = self.min_val + proportion * (self.max_val - self.min_val)
+
+class ListView(Widget):
+    """Scrollable list of items."""
+    def __init__(self, x, y, width, height, items=[]):
+        self.items = items
+        self.scroll_offset = 0
+        self.selected_index = -1
+    
+    def draw(self):
+        # Draw visible items with clipping
+        item_height = 30
+        visible_start = self.scroll_offset // item_height
+        visible_end = (self.scroll_offset + self.height) // item_height
+        
+        for i in range(visible_start, min(visible_end + 1, len(self.items))):
+            y = self.y + i * item_height - self.scroll_offset
+            self._draw_item(i, y)
+   
+
+
+#Next level,  might be pushing it
+
+class LineChart(Widget):
+    """Real-time line chart widget for plotting data over time.
+    
+    Displays a scrolling line chart with optional grid lines, axis labels,
+    and automatic scaling. Useful for sensor data visualization, performance
+    monitoring, etc.
+    
+    Args:
+        x, y: Top-left corner position
+        width, height: Chart dimensions
+        max_points: Maximum number of data points to display
+        min_val: Minimum Y-axis value (None for auto-scale)
+        max_val: Maximum Y-axis value (None for auto-scale)
+        line_color: Color of the data line
+        bg_color: Background color
+        grid_color: Grid line color (None to disable grid)
+        axis_color: Axis color
+        show_labels: Whether to show axis labels
+    """
+    
+    def __init__(self, x, y, width, height, max_points=100,
+                 min_val=None, max_val=None,
+                 line_color=COLOR_BTN_PRIMARY, bg_color=COLOR_BLACK,
+                 grid_color=COLOR_GRAY_DARK, axis_color=COLOR_WHITE,
+                 show_labels=True, show_grid=True):
+        super().__init__(x, y, width, height)
+        self.data_points = []
+        self.max_points = max_points
+        self.min_val = min_val
+        self.max_val = max_val
+        self.line_color = line_color
+        self.bg_color = bg_color
+        self.grid_color = grid_color
+        self.axis_color = axis_color
+        self.show_labels = show_labels
+        self.show_grid = show_grid
+        
+        # Auto-scaling ranges
+        self.auto_min = 0
+        self.auto_max = 100
+        
+        # Chart area (leave space for labels if enabled)
+        self.chart_padding = 25 if show_labels else 5
+        self.chart_x = x + self.chart_padding
+        self.chart_y = y + 5
+        self.chart_width = width - self.chart_padding - 5
+        self.chart_height = height - 10
+    
+    def _calculate_auto_range(self):
+        """Calculate automatic min/max based on current data."""
+        if not self.data_points:
+            self.auto_min = 0
+            self.auto_max = 100
+            return
+        
+        data_min = min(self.data_points)
+        data_max = max(self.data_points)
+        
+        # Add 10% padding for better visualization
+        range_size = data_max - data_min
+        if range_size == 0:
+            range_size = abs(data_max) * 0.1 or 1
+        
+        padding = range_size * 0.1
+        self.auto_min = data_min - padding
+        self.auto_max = data_max + padding
+    
+    def _value_to_y(self, value):
+        y_min = self.min_val if self.min_val is not None else self.auto_min
+        y_max = self.max_val if self.max_val is not None else self.auto_max
+        
+        if y_max == y_min:
+            return self.chart_y + self.chart_height // 2
+        
+        proportion = (value - y_min) / (y_max - y_min)
+        y = self.chart_y + self.chart_height - int(proportion * self.chart_height)
+        
+        return y
+    
+    def _index_to_x(self, index):
+        if len(self.data_points) <= 1:
+            return self.chart_x
+        
+        x_step = self.chart_width / (self.max_points - 1)
+        x = self.chart_x + int(index * x_step)
+        
+        return x
+    
+    def draw_grid(self):
+        if not self.show_grid or self.grid_color is None:
+            return
+        
+        num_h_lines = 5
+        for i in range(num_h_lines):
+            y = self.chart_y + int(i * self.chart_height / (num_h_lines - 1))
+            ili9488.line(self.chart_x, y, 
+                        self.chart_x + self.chart_width - 1, y,
+                        self.grid_color)
+        
+        if len(self.data_points) > 1:
+            v_step = max(1, self.max_points // 10)
+            for i in range(0, self.max_points, v_step):
+                if i >= len(self.data_points):
+                    break
+                x = self._index_to_x(i)
+                ili9488.line(x, self.chart_y,
+                           x, self.chart_y + self.chart_height - 1,
+                           self.grid_color)
+    
+    def draw_axes(self):
+        # Y axis (left)
+        ili9488.line(self.chart_x, self.chart_y,
+                    self.chart_x, self.chart_y + self.chart_height - 1,
+                    self.axis_color)
+        
+        # X axis (bottom)
+        ili9488.line(self.chart_x, self.chart_y + self.chart_height - 1,
+                    self.chart_x + self.chart_width - 1, 
+                    self.chart_y + self.chart_height - 1,
+                    self.axis_color)
+    
+    def draw_labels(self):
+        if not self.show_labels:
+            return
+        
+        y_min = self.min_val if self.min_val is not None else self.auto_min
+        y_max = self.max_val if self.max_val is not None else self.auto_max
+        
+        label_font = FONT_SMALL
+        
+        max_text = f"{int(y_max)}"
+        ili9488.text(self.x + 2, self.chart_y, max_text, 
+                    self.axis_color, self.bg_color, label_font)
+        
+        min_text = f"{int(y_min)}"
+        ili9488.text(self.x + 2, 
+                    self.chart_y + self.chart_height - 8, 
+                    min_text, self.axis_color, self.bg_color, label_font)
+    
+    def draw_line(self):
+        if len(self.data_points) < 2:
+            if len(self.data_points) == 1:
+                x = self._index_to_x(0)
+                y = self._value_to_y(self.data_points[0])
+                ili9488.circle(x, y, 2, self.line_color, self.line_color)
+            return
+
+        #HACK: Need to hold line thickness state or we'll break other calls
+                
+        old_thickness = ili9488.get_line_thickness()
+        ili9488.set_line_thickness(2)
+        
+        for i in range(len(self.data_points) - 1):
+            x1 = self._index_to_x(i)
+            y1 = self._value_to_y(self.data_points[i])
+            x2 = self._index_to_x(i + 1)
+            y2 = self._value_to_y(self.data_points[i + 1])
+            
+            if (self.chart_x <= x1 <= self.chart_x + self.chart_width and
+                self.chart_x <= x2 <= self.chart_x + self.chart_width):
+                ili9488.line(x1, y1, x2, y2, self.line_color)
+        
+        ili9488.set_line_thickness(old_thickness)
+    
+    def draw(self):
+        if not self.visible:
+            return
+        
+        if self.min_val is None or self.max_val is None:
+            self._calculate_auto_range()
+        
+        ili9488.rect(self.x, self.y, self.width, self.height,
+                    self.bg_color, self.bg_color)
+        
+        self.draw_grid()
+        self.draw_axes()
+        self.draw_labels()
+        self.draw_line()
+    
+    def add_point(self, value):
+        self.data_points.append(value)
+        
+        if len(self.data_points) > self.max_points:
+            self.data_points.pop(0)
+        
+        self.draw()
+        self.update()
+
+    def add_point_fast(self, value):
+        """Add point with incremental drawing (faster)."""
+        old_len = len(self.data_points)
+        
+        self.data_points.append(value)
+        if len(self.data_points) > self.max_points:
+            self.data_points.pop(0)
+            # Full redraw needed when scrolling
+            self.draw()
+        else:
+            # Just draw new segment
+            if old_len >= 1:
+                x1 = self._index_to_x(old_len - 1)
+                y1 = self._value_to_y(self.data_points[old_len - 1])
+                x2 = self._index_to_x(old_len)
+                y2 = self._value_to_y(value)
+                
+                old_thickness = ili9488.get_line_thickness()
+                ili9488.set_line_thickness(2)
+                ili9488.line(x1, y1, x2, y2, self.line_color)
+                ili9488.set_line_thickness(old_thickness)
+    
+        self.update()
+    
+    def clear(self):
+        self.data_points = []
+        self.draw()
+        self.update()
+    
+    def set_data(self, data):
+        
+        self.data_points = list(data[-self.max_points:])
+        self.draw()
+        self.update()
+    
+    def set_range(self, min_val, max_val):
+        self.min_val = min_val
+        self.max_val = max_val
+        self.draw()
+        self.update()
+
+
+#for testing
+
+# chart = ui.LineChart(10, 10, 300, 220, max_points=50,
+#                      line_color=ui.COLOR_GREEN,
+#                      bg_color=ui.COLOR_BLACK,
+#                      grid_color=ui.COLOR_GRAY_DARK,
+#                      show_labels=True,
+#                      show_grid=True)
+
+# # Draw initial empty chart
+# chart.draw()
+# ili9488.show()
+
+# # Simulate real-time data (sine wave)
+# angle = 0
+# while True:
+#     value = 50 + 30 * math.sin(math.radians(angle))
+#     chart.add_point(value)
+    
+#     angle = (angle + 10) % 360
+#     time.sleep_ms(100)
