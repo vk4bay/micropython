@@ -76,55 +76,76 @@ ALIGN_BOTTOM = 2
 
 
 class Font:
-    """Font rendering class with multiple size support."""
+    # Class variable to track if a custom font is set
+    _custom_font = None
     
     def __init__(self, size=FONT_MEDIUM):
         self.size = size
-        self.char_width = 8 * size
-        self.char_height = 8 * size
+    
+    @classmethod
+    def set_custom_font(cls, font_module):
+        ili9488.set_font(font_module)
+        cls._custom_font = font_module
+
+
+    @classmethod
+    def clear_custom_font(cls):
+        ili9488.clear_font()
+        cls._custom_font = None
     
     def get_text_width(self, text):
         """Calculate the width of text in pixels."""
-        return len(text) * self.char_width
+        if self._custom_font is not None:
+            total_width = 0
+            for ch in text:
+                try:
+                    char_data = self._custom_font.get_ch(ch)
+                    char_width = char_data[2]
+                    total_width += char_width
+                except:
+                    total_width += 8
+            return total_width
+        else:
+            return len(text) * 8 * self.size
     
     def get_text_height(self):
         """Get the height of text in pixels."""
-        return self.char_height
-    
-    def draw_char(self, x, y, char, color):
-        """Draw a single character at the given position."""
-        # Use native ili9488.text for single character
-        ili9488.text(x, y, char, color, None, self.size)
+        if self._custom_font is not None:
+            try:
+                char_data = self._custom_font.get_ch('X')
+                return char_data[1]
+            except:
+                return 16
+        else:
+            return 8 * self.size
     
     def draw_text(self, x, y, text, color, bg_color=None):
-        """Draw text at the given position."""
-        # Use native text rendering
+        """Draw text at position."""
         ili9488.text(x, y, text, color, bg_color, self.size)
     
     def draw_text_aligned(self, x, y, width, height, text, color, 
                          h_align=ALIGN_CENTER, v_align=ALIGN_MIDDLE, bg_color=None):
-        """Draw text with alignment within a bounding box."""
         text_width = self.get_text_width(text)
         text_height = self.get_text_height()
         
-        # Calculate horizontal position
         if h_align == ALIGN_LEFT:
             text_x = x
-        elif h_align == ALIGN_CENTER:
-            text_x = x + (width - text_width) // 2
-        else:  # ALIGN_RIGHT
+        elif h_align == ALIGN_RIGHT:
             text_x = x + width - text_width
+        else:
+            text_x = x + (width - text_width) // 2
         
-        # Calculate vertical position
         if v_align == ALIGN_TOP:
             text_y = y
-        elif v_align == ALIGN_MIDDLE:
-            text_y = y + (height - text_height) // 2
-        else:  # ALIGN_BOTTOM
+        elif v_align == ALIGN_BOTTOM:
             text_y = y + height - text_height
+        else:
+            text_y = y + (height - text_height) // 2
         
-        self.draw_text(text_x, text_y, text, color, bg_color)
-
+        if bg_color is not None:
+            ili9488.rect(x, y, width, height, bg_color, bg_color)
+        
+        ili9488.text(text_x, text_y, text, color, None, self.size)
 
 # Default font instance
 _default_font = Font(FONT_MEDIUM)
@@ -256,13 +277,14 @@ class Button(Widget):
     """Basic flat button widget."""
     
     def __init__(self, x, y, width, height, text, color=COLOR_BTN_PRIMARY, 
-                 text_color=COLOR_WHITE, border_color=None):
+                 text_color=COLOR_WHITE, border_color=None, sheen=True):
         super().__init__(x, y, width, height)
         self.text = text
         self.color = color
         self.text_color = text_color
         self.border_color = border_color if border_color is not None else _darken_color(color)
         self.pressed = False
+        self.sheen = sheen  # Add sheen parameter
     
     def draw(self):
         """Draw the button."""
@@ -277,10 +299,30 @@ class Button(Widget):
         ili9488.rect(self.x, self.y, self.width, self.height, 
                      self.border_color, display_color)
         
-        # Draw centered text
-        self.font.draw_text_aligned(self.x, self.y, self.width, self.height,
-                                   self.text, self.text_color,
-                                   ALIGN_CENTER, ALIGN_MIDDLE)
+        # Add sheen effect (gradient highlight on top portion)
+        if self.sheen and not self.pressed and self.enabled:
+            sheen_height = self.height / 3
+            highlight_color = COLOR_WHITE
+            
+            # Draw gradient from white to base color
+            for i in range(sheen_height):
+                # Calculate alpha blend factor (fades from 0.7 to 0.0)
+                alpha = 0.7 * (1 - i / sheen_height)
+                line_color = _blend_color(display_color, highlight_color, alpha)
+                print(f"Step {i}: alpha={alpha:.2f}, color=0x{line_color:06X}")
+                
+                ili9488.line(self.x + 2, self.y + 2 + i,
+                           self.x + self.width - 3, self.y + 2 + i,
+                           line_color)
+        
+            # Draw centered text
+        text_width = self.font.get_text_width(self.text)
+        text_height = self.font.get_text_height()
+        text_x = self.x + (self.width - text_width) // 2
+        text_y = self.y + (self.height - text_height) // 2
+        
+        # Draw text with transparent background
+        ili9488.text(text_x, text_y, self.text, self.text_color, None, self.font.size)
     
     def set_pressed(self, pressed):
         """Set the button pressed state."""
@@ -288,78 +330,96 @@ class Button(Widget):
             self.pressed = pressed
             self.draw()
             self.update()
-
-
+            
 class Button3D(Widget):
-    """3D-style button with raised/pressed appearance."""
+    """3D raised button with border effects and optional rounded corners."""
     
     def __init__(self, x, y, width, height, text, color=COLOR_BTN_PRIMARY, 
-                 text_color=COLOR_WHITE):
+                 text_color=COLOR_WHITE, sheen=True, corner_radius=90):
         super().__init__(x, y, width, height)
         self.text = text
         self.color = color
         self.text_color = text_color
         self.pressed = False
-        self.border_width = 2
+        self.sheen = sheen
+        self.corner_radius = min(corner_radius, min(width, height) // 2)  # Cap radius
+    
+    def _draw_rounded_rect_filled(self, x, y, w, h, r, fill_color):
+        if r <= 0:
+            # No rounding - use fast rect fill
+            ili9488.rect(x, y, w, h, fill_color, fill_color)
+            return
+        
+        # Center rectangle (full height, inset by radius)
+        ili9488.rect(x + r, y, w - 2*r, h, fill_color, fill_color)
+        # Left and right rectangles (height minus corners)
+        ili9488.rect(x, y + r, r, h - 2*r, fill_color, fill_color)
+        ili9488.rect(x + w - r, y + r, r, h - 2*r, fill_color, fill_color)
+        # Draw four corner circles (filled)
+        ili9488.circle(x + r, y + r, r, fill_color, fill_color)
+        ili9488.circle(x + w - 1 - r, y + r, r, fill_color, fill_color)
+        ili9488.circle(x + r, y + h - 1 - r, r, fill_color, fill_color)
+        ili9488.circle(x + w - 1 - r, y + h - 1 - r, r, fill_color, fill_color)
     
     def draw(self):
-        """Draw the 3D button."""
+        """Draw the 3D button with rounded corners."""
         if not self.visible:
             return
         
-        base_color = COLOR_GRAY if not self.enabled else self.color
+        # Calculate colors for 3D effect
+        if self.pressed:
+            face_color = _darken_color(self.color, 0.7)
+            highlight_color = _darken_color(self.color, 0.5)
+            shadow_color = _lighten_color(self.color, 1.3)
+        else:
+            face_color = self.color
+            highlight_color = _lighten_color(self.color, 1.5)
+            shadow_color = _darken_color(self.color, 0.5)
+        
+        if not self.enabled:
+            face_color = COLOR_GRAY
+            highlight_color = COLOR_GRAY_LIGHT
+            shadow_color = COLOR_GRAY_DARK
+        
+        r = self.corner_radius
+        
+        # Draw filled button face with rounded corners
+        self._draw_rounded_rect_filled(self.x, self.y, self.width, self.height, 
+                                       r, face_color)
+        # Add sheen effect
+        if self.sheen and not self.pressed and self.enabled:
+             sheen_height = self.height // 3
+             sheen_white = COLOR_WHITE
+             
+             for i in range(sheen_height):
+                 alpha = 0.5 * (1 - i / sheen_height)
+                 line_color = _blend_color(face_color, sheen_white, alpha)
+                 
+                 if r > 0 and i < r:
+                     # Shorten line for rounded top corners
+                     dy = r - i
+                     # For a circle: x = sqrt(r^2 - y^2)
+                     dx = int((r * r - dy * dy) ** 0.5)
+                     inset = r - dx
+                     
+                     ili9488.line(self.x + r - dx + 2, self.y + 2 + i,
+                                self.x + self.width - (r - dx) - 3, self.y + 2 + i,
+                                line_color)
+                 else:
+                     ili9488.line(self.x + 2, self.y + 2 + i,
+                                self.x + self.width - 3, self.y + 2 + i,
+                                line_color)
+         
+        text_width = self.font.get_text_width(self.text)
+        text_height = self.font.get_text_height()
+        text_x = self.x + (self.width - text_width) // 2
+        text_y = self.y + (self.height - text_height) // 2
         
         if self.pressed:
-            # Pressed state - appears sunken
-            # Dark top/left, light bottom/right
-            top_color = _darken_color(base_color, 0.5)
-            bottom_color = _lighten_color(base_color, 1.2)
-            face_color = _darken_color(base_color, 0.8)
-            text_offset = 1
-        else:
-            # Raised state - appears elevated
-            # Light top/left, dark bottom/right
-            top_color = _lighten_color(base_color, 1.3)
-            bottom_color = _darken_color(base_color, 0.6)
-            face_color = base_color
-            text_offset = 0
+            text_x += 1
+            text_y += 1
         
-        # Draw face
-        ili9488.rect(self.x + self.border_width, 
-                     self.y + self.border_width,
-                     self.width - self.border_width * 2, 
-                     self.height - self.border_width * 2,
-                     face_color, face_color)
-        
-        # Draw top edge
-        for i in range(self.border_width):
-            ili9488.line(self.x + i, self.y + i, 
-                        self.x + self.width - i - 1, self.y + i, 
-                        top_color)
-        
-        # Draw left edge
-        for i in range(self.border_width):
-            ili9488.line(self.x + i, self.y + i, 
-                        self.x + i, self.y + self.height - i - 1, 
-                        top_color)
-        
-        # Draw bottom edge
-        for i in range(self.border_width):
-            ili9488.line(self.x + i, self.y + self.height - i - 1,
-                        self.x + self.width - i - 1, self.y + self.height - i - 1,
-                        bottom_color)
-        
-        # Draw right edge
-        for i in range(self.border_width):
-            ili9488.line(self.x + self.width - i - 1, self.y + i,
-                        self.x + self.width - i - 1, self.y + self.height - i - 1,
-                        bottom_color)
-        
-        # Draw centered text with offset when pressed
-        self.font.draw_text_aligned(self.x + text_offset, self.y + text_offset, 
-                                   self.width, self.height,
-                                   self.text, self.text_color,
-                                   ALIGN_CENTER, ALIGN_MIDDLE)
+        ili9488.text(text_x, text_y, self.text, self.text_color, None, self.font.size)
     
     def set_pressed(self, pressed):
         """Set the button pressed state."""
