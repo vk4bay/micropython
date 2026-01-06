@@ -14,6 +14,16 @@
 #define CORE1_TASK_STACK_SIZE 4096
 #define CORE1_TASK_PRIORITY 5
 #define CORE1_MAX_PAYLOAD_SIZE 128
+#define CORE1_SHUTDOWN_TIMEOUT_MS 5000
+
+// System state
+typedef enum {
+    CORE1_STATE_UNINITIALIZED = 0,
+    CORE1_STATE_INITIALIZED = 1,
+    CORE1_STATE_RUNNING = 2,
+    CORE1_STATE_SHUTTING_DOWN = 3,
+    CORE1_STATE_ERROR = 4
+} core1_system_state_t;
 
 // Response modes
 typedef enum {
@@ -81,6 +91,11 @@ typedef struct {
     pending_command_t pending[CORE1_MAX_PENDING];
     bool initialized;
     bool monitoring;
+    core1_system_state_t system_state;
+    bool shutdown_requested;
+    bool monitor_stop_requested;
+    volatile bool core1_task_exited;
+    volatile bool monitor_task_exited;
 } core1_state_t;
 
 // Function declarations
@@ -99,5 +114,11 @@ void core1_signal_event(void* event_ref, core1_response_t* resp);
 void core1_signal_event_timeout(void* event_ref);
 void core1_set_log_level(int level);
 
-#endif // CORE1_API_H
+// Shutdown and recovery functions
+void core1_shutdown(uint32_t timeout_ms, bool force);
+void core1_stop_monitoring(uint32_t timeout_ms);
+core1_system_state_t core1_get_system_state(void);
+bool core1_is_initialized(void);
 
+#endif // CORE1_API_H
+       //

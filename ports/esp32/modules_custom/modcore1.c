@@ -7,7 +7,9 @@
 #include <string.h>
 #include <inttypes.h>
 
-static const char *TAG = "MODCORE1";
+// Define TAG as a macro before including core1_api.c
+// This way core1_api.c won't redefine it
+#define TAG "MODCORE1"
 
 // Include the core1_api implementation directly
 // This ensures all functions are in the same compilation unit
@@ -279,7 +281,8 @@ static void core1_process_queue_puts(void) {
             ESP_LOGI(TAG, "[QUEUE] Successfully put event in queue");
         } else {
             // Exception occurred (likely queue full)
-            mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+            // Note: nlr.ret_val contains the exception, but we don't need it
+            (void)nlr.ret_val;  // Mark as intentionally unused
             
             item->retry_count++;
             
@@ -411,6 +414,47 @@ static mp_obj_t core1_set_log_level_mp(mp_obj_t level_obj) {
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(core1_set_log_level_obj, core1_set_log_level_mp);
+
+// Shutdown function
+static mp_obj_t core1_shutdown_mp(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_timeout, ARG_force };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_timeout, MP_ARG_INT, {.u_int = CORE1_SHUTDOWN_TIMEOUT_MS} },
+        { MP_QSTR_force, MP_ARG_BOOL, {.u_bool = false} },
+    };
+    
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+    
+    uint32_t timeout_ms = args[ARG_timeout].u_int;
+    bool force = args[ARG_force].u_bool;
+    
+    core1_shutdown(timeout_ms, force);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_KW(core1_shutdown_obj, 0, core1_shutdown_mp);
+
+// Stop monitoring function
+static mp_obj_t core1_stop_monitoring_mp(size_t n_args, const mp_obj_t *args) {
+    uint32_t timeout_ms = (n_args > 0) ? mp_obj_get_int(args[0]) : CORE1_SHUTDOWN_TIMEOUT_MS;
+    core1_stop_monitoring(timeout_ms);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(core1_stop_monitoring_mp_obj, 0, 1, core1_stop_monitoring_mp);
+
+// Get system state function
+static mp_obj_t core1_get_state_mp(void) {
+    core1_system_state_t state = core1_get_system_state();
+    return mp_obj_new_int(state);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(core1_get_state_obj, core1_get_state_mp);
+
+// Check if initialized
+static mp_obj_t core1_is_initialized_mp(void) {
+    bool initialized = core1_is_initialized();
+    return mp_obj_new_bool(initialized);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(core1_is_initialized_obj, core1_is_initialized_mp);
 
 // Event object implementation
 
@@ -657,6 +701,10 @@ static const mp_rom_map_elem_t core1_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_start_monitoring), MP_ROM_PTR(&core1_start_monitoring_obj) },
     { MP_ROM_QSTR(MP_QSTR_process_callbacks), MP_ROM_PTR(&core1_process_callbacks_obj) },
     { MP_ROM_QSTR(MP_QSTR_set_log_level), MP_ROM_PTR(&core1_set_log_level_obj) },
+    { MP_ROM_QSTR(MP_QSTR_shutdown), MP_ROM_PTR(&core1_shutdown_obj) },
+    { MP_ROM_QSTR(MP_QSTR_stop_monitoring), MP_ROM_PTR(&core1_stop_monitoring_mp_obj) },
+    { MP_ROM_QSTR(MP_QSTR_get_state), MP_ROM_PTR(&core1_get_state_obj) },
+    { MP_ROM_QSTR(MP_QSTR_is_initialized), MP_ROM_PTR(&core1_is_initialized_obj) },
     
     // Exceptions
     { MP_ROM_QSTR(MP_QSTR_Core1Error), MP_ROM_PTR(&mp_type_Core1Error) },
@@ -671,6 +719,13 @@ static const mp_rom_map_elem_t core1_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_CMD_ADD), MP_ROM_INT(CMD_ADD) },
     { MP_ROM_QSTR(MP_QSTR_CMD_DELAY), MP_ROM_INT(CMD_DELAY) },
     { MP_ROM_QSTR(MP_QSTR_CMD_STATUS), MP_ROM_INT(CMD_STATUS) },
+    
+    // System states
+    { MP_ROM_QSTR(MP_QSTR_STATE_UNINITIALIZED), MP_ROM_INT(CORE1_STATE_UNINITIALIZED) },
+    { MP_ROM_QSTR(MP_QSTR_STATE_INITIALIZED), MP_ROM_INT(CORE1_STATE_INITIALIZED) },
+    { MP_ROM_QSTR(MP_QSTR_STATE_RUNNING), MP_ROM_INT(CORE1_STATE_RUNNING) },
+    { MP_ROM_QSTR(MP_QSTR_STATE_SHUTTING_DOWN), MP_ROM_INT(CORE1_STATE_SHUTTING_DOWN) },
+    { MP_ROM_QSTR(MP_QSTR_STATE_ERROR), MP_ROM_INT(CORE1_STATE_ERROR) },
 };
 static MP_DEFINE_CONST_DICT(core1_module_globals, core1_module_globals_table);
 
