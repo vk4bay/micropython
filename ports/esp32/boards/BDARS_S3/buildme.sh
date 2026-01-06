@@ -1,10 +1,13 @@
-cd ~/github/esp-idf/
+cwd="$PWD"
+cd ../../../../../esp-idf/
 . ./export.sh
 
-cd ~/github/micropython/ports/esp32
+cd $cwd
+cd ../..
 rm -rf build-BDARS_S3
 make BOARD=BDARS_S3 submodules
 idf.py -D MICROPY_BOARD=BDARS_S3 reconfigure
 make BOARD=BDARS_S3
-cp ../../build-BDARS_S3/firmware.bin /mnt/c/tmp
+
+cp  ./build-BDARS_S3/firmware.bin /mnt/c/tmp
 
