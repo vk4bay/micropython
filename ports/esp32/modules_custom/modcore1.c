@@ -31,6 +31,25 @@ static callback_item_t callback_queue[CALLBACK_QUEUE_SIZE];
 static int callback_queue_head = 0;
 static int callback_queue_tail = 0;
 
+// Queue put scheduling for Peter Hinch queue integration
+#define QUEUE_PUT_QUEUE_SIZE 16
+#define MAX_QUEUED_EVENTS 16
+#define MAX_QUEUE_PUT_RETRIES 10
+
+typedef struct {
+    mp_obj_t queue_obj;      // Peter Hinch Queue object
+    mp_obj_t event_obj;      // Event object to put in queue
+    uint8_t retry_count;     // Number of failed attempts
+} queue_put_item_t;
+
+static queue_put_item_t queue_put_queue[QUEUE_PUT_QUEUE_SIZE];
+static int queue_put_head = 0;
+static int queue_put_tail = 0;
+
+// GC protection: keep event objects alive until queued
+static mp_obj_t queued_events[MAX_QUEUED_EVENTS];
+static int queued_events_count = 0;
+
 // Event object type
 typedef struct {
     mp_obj_base_t base;
@@ -50,6 +69,7 @@ const mp_obj_type_t core1_event_type;
 // Forward declarations
 static mp_obj_t core1_init_mp(void);
 static mp_obj_t core1_call_blocking(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args);
+static void core1_process_queue_puts(void);
 
 // Module initialization
 static mp_obj_t core1_init_mp(void) {
@@ -223,7 +243,84 @@ static mp_obj_t core1_process_callbacks(void) {
     }
     
     ESP_LOGI(TAG, "[CALLBACK] Processed %d callbacks", processed);
+    
+    // Process Peter Hinch queue puts
+    core1_process_queue_puts();
+    
     return mp_obj_new_int(processed);
+}
+
+// Process pending queue puts (called from process_callbacks)
+static void core1_process_queue_puts(void) {
+    int items_to_process = (queue_put_tail - queue_put_head + QUEUE_PUT_QUEUE_SIZE) % QUEUE_PUT_QUEUE_SIZE;
+    
+    if (items_to_process == 0) {
+        return;  // Nothing to process
+    }
+    
+    ESP_LOGI(TAG, "[QUEUE] Processing %d queued events", items_to_process);
+    
+    // Process each item (may skip failed items to try again later)
+    for (int i = 0; i < items_to_process; i++) {
+        queue_put_item_t* item = &queue_put_queue[queue_put_head];
+        bool success = false;
+        
+        // Try to put event in queue
+        nlr_buf_t nlr;
+        if (nlr_push(&nlr) == 0) {
+            // Call queue.put_nowait(event)
+            mp_obj_t args[1] = { item->event_obj };
+            mp_obj_t put_method = mp_load_attr(item->queue_obj, MP_QSTR_put_nowait);
+            mp_call_function_n_kw(put_method, 1, 0, args);
+            
+            success = true;
+            nlr_pop();
+            
+            ESP_LOGI(TAG, "[QUEUE] Successfully put event in queue");
+        } else {
+            // Exception occurred (likely queue full)
+            mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+            
+            item->retry_count++;
+            
+            if (item->retry_count >= MAX_QUEUE_PUT_RETRIES) {
+                // Give up after max retries
+                mp_printf(&mp_plat_print, 
+                    "Warning: Failed to put event in queue after %d retries - result available via polling\n",
+                    MAX_QUEUE_PUT_RETRIES);
+                ESP_LOGW(TAG, "[QUEUE] Giving up on event after %d retries", MAX_QUEUE_PUT_RETRIES);
+                success = true;  // Remove from queue (give up)
+            } else {
+                ESP_LOGD(TAG, "[QUEUE] Queue put failed (attempt %d/%d), will retry", 
+                         item->retry_count, MAX_QUEUE_PUT_RETRIES);
+            }
+        }
+        
+        if (success) {
+            // Remove from queue_put_queue
+            queue_put_head = (queue_put_head + 1) % QUEUE_PUT_QUEUE_SIZE;
+            
+            // Remove from GC protection list
+            for (int j = 0; j < queued_events_count; j++) {
+                if (queued_events[j] == item->event_obj) {
+                    // Replace with last item and decrement count
+                    queued_events[j] = queued_events[--queued_events_count];
+                    ESP_LOGD(TAG, "[QUEUE] Removed event from GC protection, %d remaining", 
+                             queued_events_count);
+                    break;
+                }
+            }
+        } else {
+            // Move to next item (will retry this one next time)
+            queue_put_head = (queue_put_head + 1) % QUEUE_PUT_QUEUE_SIZE;
+            // Put it back at the end
+            int next_tail = (queue_put_tail + 1) % QUEUE_PUT_QUEUE_SIZE;
+            if (next_tail != queue_put_head) {
+                queue_put_queue[queue_put_tail] = *item;
+                queue_put_tail = next_tail;
+            }
+        }
+    }
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(core1_process_callbacks_obj, core1_process_callbacks);
 
@@ -384,10 +481,18 @@ static mp_obj_t core1_event_get_result(size_t n_args, const mp_obj_t *pos_args, 
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(core1_event_get_result_obj, 1, core1_event_get_result);
 
+// Get sequence number
+static mp_obj_t core1_event_get_sequence(mp_obj_t self_in) {
+    core1_event_obj_t *self = MP_OBJ_TO_PTR(self_in);
+    return mp_obj_new_int(self->sequence);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(core1_event_get_sequence_obj, core1_event_get_sequence);
+
 // Event object locals dict
 static const mp_rom_map_elem_t core1_event_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_is_ready), MP_ROM_PTR(&core1_event_is_ready_obj) },
     { MP_ROM_QSTR(MP_QSTR_get_result), MP_ROM_PTR(&core1_event_get_result_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sequence), MP_ROM_PTR(&core1_event_get_sequence_obj) },
 };
 static MP_DEFINE_CONST_DICT(core1_event_locals_dict, core1_event_locals_dict_table);
 
@@ -408,6 +513,33 @@ void core1_signal_event(void* event_ref, core1_response_t* resp) {
     event->raw_response = *resp;
     event->has_raw_response = true;
     event->ready = true;
+    
+    // If a Peter Hinch queue was provided, schedule putting the event in it
+    if (event->queue_obj != mp_const_none) {
+        int next = (queue_put_tail + 1) % QUEUE_PUT_QUEUE_SIZE;
+        if (next != queue_put_head) {
+            mp_obj_t event_obj = MP_OBJ_FROM_PTR(event);
+            
+            // Add to GC protection list
+            if (queued_events_count < MAX_QUEUED_EVENTS) {
+                queued_events[queued_events_count++] = event_obj;
+            } else {
+                ESP_LOGW(TAG, "[QUEUE] GC protection list full, dropping oldest event");
+                // Drop oldest to make room
+                queued_events[0] = event_obj;
+            }
+            
+            // Schedule queue put
+            queue_put_queue[queue_put_tail].queue_obj = event->queue_obj;
+            queue_put_queue[queue_put_tail].event_obj = event_obj;
+            queue_put_queue[queue_put_tail].retry_count = 0;
+            queue_put_tail = next;
+            
+            ESP_LOGI(TAG, "[QUEUE] Scheduled queue put for event seq=%" PRIu32, event->sequence);
+        } else {
+            ESP_LOGW(TAG, "[QUEUE] Queue put queue full for event seq=%" PRIu32, event->sequence);
+        }
+    }
 }
 
 void core1_signal_event_timeout(void* event_ref) {
@@ -417,6 +549,27 @@ void core1_signal_event_timeout(void* event_ref) {
     event->raw_response.status = CORE1_ERROR_TIMEOUT;
     event->has_raw_response = true;
     event->ready = true;
+    
+    // If a Peter Hinch queue was provided, schedule putting the event in it
+    if (event->queue_obj != mp_const_none) {
+        int next = (queue_put_tail + 1) % QUEUE_PUT_QUEUE_SIZE;
+        if (next != queue_put_head) {
+            mp_obj_t event_obj = MP_OBJ_FROM_PTR(event);
+            
+            // Add to GC protection list
+            if (queued_events_count < MAX_QUEUED_EVENTS) {
+                queued_events[queued_events_count++] = event_obj;
+            }
+            
+            // Schedule queue put
+            queue_put_queue[queue_put_tail].queue_obj = event->queue_obj;
+            queue_put_queue[queue_put_tail].event_obj = event_obj;
+            queue_put_queue[queue_put_tail].retry_count = 0;
+            queue_put_tail = next;
+            
+            ESP_LOGI(TAG, "[QUEUE] Scheduled queue put for timed-out event");
+        }
+    }
 }
 
 // Call with event

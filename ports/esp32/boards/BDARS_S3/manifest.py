@@ -19,6 +19,13 @@ freeze("$(PORT_DIR)/modules", (
     "dejavu32.py",
     "dejavu48.py",
     "mono32.py",
+    "core1_helper.py",
+    "primitives/",
+    "microdot.py",
+    "microdot_asyncio.py",
+    "microdot_asyncio_websocket.py",
+    "microdot_utemplate.py,
+    microdot_websocket.py,
 ))
 
 
