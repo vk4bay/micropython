@@ -277,7 +277,7 @@ class Button(Widget):
     """Basic flat button widget."""
     
     def __init__(self, x, y, width, height, text, color=COLOR_BTN_PRIMARY, 
-                 text_color=COLOR_WHITE, border_color=None, sheen=True):
+                 text_color=COLOR_WHITE, border_color=None, sheen=True, on_click=None):
         super().__init__(x, y, width, height)
         self.text = text
         self.color = color
@@ -285,7 +285,7 @@ class Button(Widget):
         self.border_color = border_color if border_color is not None else _darken_color(color)
         self.pressed = False
         self.sheen = sheen  # Add sheen parameter
-    
+        self.on_click = on_click 
     def draw(self):
         """Draw the button."""
         if not self.visible:
@@ -327,15 +327,23 @@ class Button(Widget):
     def set_pressed(self, pressed):
         """Set the button pressed state."""
         if self.pressed != pressed:
+            was_pressed = self.pressed
             self.pressed = pressed
             self.draw()
             self.update()
             
+            if was_pressed and not pressed and self.on_click:
+                self.on_click(self)
+    
+    def click(self):
+        if self.enabled and self.on_click:
+            self.on_click(self)
+\
 class Button3D(Widget):
     """3D raised button with border effects and optional rounded corners."""
     
     def __init__(self, x, y, width, height, text, color=COLOR_BTN_PRIMARY, 
-                 text_color=COLOR_WHITE, sheen=True, corner_radius=90):
+                 text_color=COLOR_WHITE, sheen=True, corner_radius=90, on_click=None):
         super().__init__(x, y, width, height)
         self.text = text
         self.color = color
@@ -343,7 +351,8 @@ class Button3D(Widget):
         self.pressed = False
         self.sheen = sheen
         self.corner_radius = min(corner_radius, min(width, height) // 2)  # Cap radius
-    
+        self.on_click = on_click  
+            
     def _draw_rounded_rect_filled(self, x, y, w, h, r, fill_color):
         if r <= 0:
             # No rounding - use fast rect fill
@@ -424,9 +433,17 @@ class Button3D(Widget):
     def set_pressed(self, pressed):
         """Set the button pressed state."""
         if self.pressed != pressed:
+            was_pressed = self.pressed
             self.pressed = pressed
             self.draw()
             self.update()
+            
+            if was_pressed and not pressed and self.on_click:
+                self.on_click(self)
+    
+    def click(self):
+        if self.enabled and self.on_click:
+            self.on_click(self)
 
 
 class Panel(Widget):
@@ -461,7 +478,7 @@ class ProgressBar(Widget):
     
     def __init__(self, x, y, width, height, min_val=0, max_val=100, 
                  fg_color=COLOR_BTN_PRIMARY, bg_color=COLOR_GRAY_LIGHT,
-                 border_color=COLOR_GRAY_DARK, show_percent=False):
+                 border_color=COLOR_GRAY_DARK, show_percent=False, on_change=None):
         super().__init__(x, y, width, height)
         self.min_val = min_val
         self.max_val = max_val
@@ -470,12 +487,17 @@ class ProgressBar(Widget):
         self.bg_color = bg_color
         self.border_color = border_color
         self.show_percent = show_percent
+        self.on_change = on_change  # Callback for value changes
     
     def set_value(self, value):
         """Set the progress value."""
+        old_value = self.value
         self.value = max(self.min_val, min(self.max_val, value))
         self.draw()
         self.update()
+        
+        if old_value != self.value and self.on_change:
+            self.on_change(self, self.value)
     
     def draw(self):
         """Draw the progress bar."""
@@ -511,21 +533,37 @@ class CheckBox(Widget):
     """A checkbox widget with optional label."""
     
     def __init__(self, x, y, size=20, checked=False, 
-                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label=""):
+                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label="", on_change=None):
         super().__init__(x, y, size, size)
         self.checked = checked
         self.color = color
         self.bg_color = bg_color
         self.label = label
+        self.on_change = on_change  
         # Adjust width if there's a label
         if label:
             self.width = size + 8 + self.font.get_text_width(label)
     
     def toggle(self):
         """Toggle the checkbox state."""
+        if not self.enabled:
+            return
+        
         self.checked = not self.checked
         self.draw()
         self.update()
+        
+        if self.on_change:
+            self.on_change(self, self.checked)
+    
+    def set_checked(self, checked):
+        if self.checked != checked:
+            self.checked = checked
+            self.draw()
+            self.update()
+            
+            if self.on_change:
+                self.on_change(self, self.checked)
     
     def draw(self):
         """Draw the checkbox."""
@@ -561,7 +599,7 @@ class RadioButton(Widget):
     """A radio button widget with optional label."""
     
     def __init__(self, x, y, radius=10, selected=False, 
-                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label=""):
+                 color=COLOR_BTN_PRIMARY, bg_color=COLOR_WHITE, label="", on_select=None):
         super().__init__(x - radius, y - radius, radius * 2, radius * 2)
         self.center_x = x
         self.center_y = y
@@ -571,12 +609,18 @@ class RadioButton(Widget):
         self.bg_color = bg_color
         self.label = label
         self.group = None
+        self.on_select = on_select  
         # Adjust width if there's a label
         if label:
             self.width = radius * 2 + 8 + self.font.get_text_width(label)
     
     def select(self):
         """Select this radio button and deselect others in group."""
+        if not self.enabled:
+            return
+        
+        was_selected = self.selected
+        
         if self.group:
             for rb in self.group:
                 if rb != self:
@@ -586,6 +630,9 @@ class RadioButton(Widget):
         self.selected = True
         self.draw()
         self.update()
+        
+        if not was_selected and self.on_select:
+            self.on_select(self)
     
     def draw(self):
         """Draw the radio button."""
@@ -829,7 +876,7 @@ class Dial(Widget):
     
     def __init__(self, x, y, radius, min_val=0, max_val=100, 
                  start_angle=-135, end_angle=135,
-                 color=COLOR_WHITE, needle_color=COLOR_RED, bg_color=COLOR_BLACK):
+                 color=COLOR_WHITE, needle_color=COLOR_RED, bg_color=COLOR_BLACK, on_change=None):
         # Widget bounds are a square around the circle
         super().__init__(x - radius - 5, y - radius - 5, 
                         (radius + 5) * 2, (radius + 5) * 2)
@@ -848,6 +895,7 @@ class Dial(Widget):
         self.show_ticks = True
         self.num_major_ticks = 9
         self.num_minor_ticks = 4  # Between each major tick
+        self.on_change = on_change  # Callback for value changes
     
     def _value_to_angle(self, value):
         """Convert a value to an angle in degrees."""
@@ -966,6 +1014,8 @@ class Dial(Widget):
         if value == self.current_value:
             return
         
+        old_value = self.current_value
+        
         # Erase old needle if it was drawn
         if self.last_needle_angle is not None:
             self.erase_needle(self.last_needle_angle)
@@ -978,6 +1028,9 @@ class Dial(Widget):
         
         # Update display
         self.update()
+        
+        if self.on_change:
+            self.on_change(self, value)
     
     def animate_to(self, target_value, steps=10, delay_ms=30):
         """Smoothly animate the needle to a target value.
@@ -1013,7 +1066,7 @@ class Compass(Widget):
     """
     
     def __init__(self, x, y, radius, color=COLOR_WHITE, 
-                 needle_color=COLOR_RED, bg_color=COLOR_BLACK):
+                 needle_color=COLOR_RED, bg_color=COLOR_BLACK, on_change=None):
         # Widget bounds are a square around the circle
         super().__init__(x - radius - 5, y - radius - 5, 
                         (radius + 5) * 2, (radius + 5) * 2)
@@ -1027,6 +1080,7 @@ class Compass(Widget):
         self.last_needle_angle = None
         self.show_rose = True
         self.show_degrees = True
+        self.on_change = on_change 
     
     def _heading_to_angle(self, heading):
         """Convert compass heading to screen angle.
@@ -1184,6 +1238,8 @@ class Compass(Widget):
         if heading == self.heading:
             return
         
+        old_heading = self.heading
+        
         # Erase old needle if it was drawn
         if self.last_needle_angle is not None:
             self.erase_needle(self.last_needle_angle)
@@ -1197,6 +1253,9 @@ class Compass(Widget):
         
         # Update display
         self.update()
+        
+        if self.on_change:
+            self.on_change(self, heading)
     
     def rotate_to(self, target_heading, steps=20, delay_ms=30):
         """Smoothly animate the compass needle to a target heading.
@@ -1401,7 +1460,7 @@ class LineChart(Widget):
                  min_val=None, max_val=None,
                  line_color=COLOR_BTN_PRIMARY, bg_color=COLOR_BLACK,
                  grid_color=COLOR_GRAY_DARK, axis_color=COLOR_WHITE,
-                 show_labels=True, show_grid=True):
+                 show_labels=True, show_grid=True, on_point_added=None):
         super().__init__(x, y, width, height)
         self.data_points = []
         self.max_points = max_points
@@ -1413,7 +1472,7 @@ class LineChart(Widget):
         self.axis_color = axis_color
         self.show_labels = show_labels
         self.show_grid = show_grid
-        
+        self.on_point_added = on_point_added        
         # Auto-scaling ranges
         self.auto_min = 0
         self.auto_max = 100
@@ -1564,6 +1623,9 @@ class LineChart(Widget):
         
         self.draw()
         self.update()
+        # This might be overkill? but it is optional
+        if self.on_point_added:
+            self.on_point_added(self, value, len(self.data_points))
 
     def add_point_fast(self, value):
         """Add point with incremental drawing (faster)."""
