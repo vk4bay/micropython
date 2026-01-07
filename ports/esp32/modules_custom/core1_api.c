@@ -70,28 +70,39 @@ uint32_t core1_get_next_sequence(void) {
     return __atomic_fetch_add(&g_core1_state.sequence_counter, 1, __ATOMIC_SEQ_CST);
 }
 
+// Hash function for sequence number to pending array index
+static inline int core1_hash_sequence(uint32_t seq) {
+    return seq % CORE1_MAX_PENDING;
+}
+
 // Register a pending command
 int core1_register_pending(uint32_t seq, core1_response_mode_t mode,
                           void* callback_ref, void* event_ref, uint32_t timeout_ms) {
-    // Find free slot
-    for (int i = 0; i < CORE1_MAX_PENDING; i++) {
-        if (!g_core1_state.pending[i].active) {
-            g_core1_state.pending[i].sequence = seq;
-            g_core1_state.pending[i].mode = mode;
-            g_core1_state.pending[i].callback_ref = callback_ref;
-            g_core1_state.pending[i].event_ref = event_ref;
+    // Hash-based insertion with linear probing
+    int idx = core1_hash_sequence(seq);
+    int start_idx = idx;
+    
+    do {
+        if (!g_core1_state.pending[idx].active) {
+            g_core1_state.pending[idx].sequence = seq;
+            g_core1_state.pending[idx].mode = mode;
+            g_core1_state.pending[idx].callback_ref = callback_ref;
+            g_core1_state.pending[idx].event_ref = event_ref;
             
             // Calculate absolute deadline
             if (timeout_ms > 0) {
-                g_core1_state.pending[i].deadline_us = esp_timer_get_time() + (timeout_ms * 1000ULL);
+                g_core1_state.pending[idx].deadline_us = esp_timer_get_time() + (timeout_ms * 1000ULL);
             } else {
-                g_core1_state.pending[i].deadline_us = UINT64_MAX;  // No timeout
+                g_core1_state.pending[idx].deadline_us = UINT64_MAX;  // No timeout
             }
             
-            g_core1_state.pending[i].active = true;
-            return i;
+            g_core1_state.pending[idx].active = true;
+            return idx;
         }
-    }
+        
+        // Linear probing: move to next slot
+        idx = (idx + 1) % CORE1_MAX_PENDING;
+    } while (idx != start_idx);
     
     ESP_LOGW(TAG, "No free pending slots");
     return -1;
@@ -99,25 +110,53 @@ int core1_register_pending(uint32_t seq, core1_response_mode_t mode,
 
 // Clear a pending command
 void core1_clear_pending(uint32_t seq) {
-    for (int i = 0; i < CORE1_MAX_PENDING; i++) {
-        if (g_core1_state.pending[i].active && g_core1_state.pending[i].sequence == seq) {
-            g_core1_state.pending[i].active = false;
-            g_core1_state.pending[i].callback_ref = NULL;
-            g_core1_state.pending[i].event_ref = NULL;
+    // Hash-based lookup with linear probing
+    int idx = core1_hash_sequence(seq);
+    int start_idx = idx;
+    
+    do {
+        if (g_core1_state.pending[idx].active) {
+            if (g_core1_state.pending[idx].sequence == seq) {
+                g_core1_state.pending[idx].active = false;
+                g_core1_state.pending[idx].callback_ref = NULL;
+                g_core1_state.pending[idx].event_ref = NULL;
+                return;
+            }
+        } else {
+            // Empty slot means sequence doesn't exist (stop probing)
             return;
         }
-    }
+        
+        // Linear probing: move to next slot
+        idx = (idx + 1) % CORE1_MAX_PENDING;
+    } while (idx != start_idx);
 }
 
 // Find a pending command by sequence
 pending_command_t* core1_find_pending(uint32_t seq) {
-    for (int i = 0; i < CORE1_MAX_PENDING; i++) {
-        if (g_core1_state.pending[i].active && g_core1_state.pending[i].sequence == seq) {
-            return &g_core1_state.pending[i];
+    // Hash-based lookup with linear probing
+    int idx = core1_hash_sequence(seq);
+    int start_idx = idx;
+    
+    do {
+        if (g_core1_state.pending[idx].active) {
+            if (g_core1_state.pending[idx].sequence == seq) {
+                return &g_core1_state.pending[idx];
+            }
+        } else {
+            // Empty slot means sequence doesn't exist (stop probing)
+            return NULL;
         }
-    }
+        
+        // Linear probing: move to next slot
+        idx = (idx + 1) % CORE1_MAX_PENDING;
+    } while (idx != start_idx);
+    
     return NULL;
 }
+
+
+
 
 // Core 1 task main loop
 void core1_task_main(void *pvParameters) {
