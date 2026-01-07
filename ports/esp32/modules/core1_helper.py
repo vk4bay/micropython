@@ -12,7 +12,7 @@ class Core1Manager:
         # Only init if not already done
         try:
             core1.init()
-        except:
+        except (OSError, RuntimeError):  # Expected exception types only
             pass  # Already initialized
             
         if auto_start_monitor:
