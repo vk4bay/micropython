@@ -338,7 +338,7 @@ class Button(Widget):
     def click(self):
         if self.enabled and self.on_click:
             self.on_click(self)
-\
+
 class Button3D(Widget):
     """3D raised button with border effects and optional rounded corners."""
     
