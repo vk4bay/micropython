@@ -15,5 +15,7 @@ list(APPEND MICROPY_SOURCE_PORT
     ${PROJECT_DIR}/modules_custom/ili9488.c
     ${PROJECT_DIR}/modules_custom/ft6336.c
     ${PROJECT_DIR}/modules_custom/ili9488_ui_helpers.c
+    #    ${PROJECT_DIR}/modules_custom/core1_api.c
+    ${PROJECT_DIR}/modules_custom/modcore1.c
 )
 
