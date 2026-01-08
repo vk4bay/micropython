@@ -23,6 +23,7 @@ Usage:
 
 import ili9488
 import time
+import uasyncio as asyncio
 
 # Color constants (RGB888 format)
 COLOR_BLACK = 0x000000
@@ -224,6 +225,13 @@ class Widget:
         """Update the widget's region on display."""
         if self.visible:
             ili9488.update_region(self.x, self.y, self.width, self.height)
+
+
+class Touch:
+    def __init__(self, x, y, pressed=True):
+        self.x = x
+        self.y = y
+        self.pressed = pressed
 
 
 class Label(Widget):
@@ -1337,6 +1345,11 @@ class ScreenManager:
         self.current_screen = None
         self.screen_history = []  # Track navigation history
         self.max_history = 10    
+        # Touch callback that should return (x, y) or None
+        self.get_touch = None
+        # internal task and state
+        self._touch_task = None
+        self._pressed_widget = None
     def add_screen(self, screen):
         self.screens[screen.name] = screen
     
@@ -1379,7 +1392,82 @@ class ScreenManager:
     def clear_history(self):
         self.screen_history = []
 
-    #last minute helpers, TODO: Paul to implement tests
+    def set_touch_callback(self, callback):
+        self.get_touch = callback
+        if self._touch_task is None:
+            try:
+                self._touch_task = asyncio.create_task(self._touch_loop())
+            except AttributeError:
+                try:
+                    loop = asyncio.get_event_loop()
+                    self._touch_task = loop.create_task(self._touch_loop())
+                except Exception:
+                    print("Error: Unable to create touch task for ScreenManager.")
+                    self._touch_task = None
+
+    async def _touch_loop(self):
+        while True:
+            try:
+                if self.get_touch is None:
+                    await asyncio.sleep_ms(50)
+                    continue
+                res = None
+                try:
+                    res = self.get_touch()
+                except Exception:
+                    res = None
+                if res is not None:
+                    try:
+                        x, y = res
+                    except Exception:
+                        x = y = None
+
+                    if x is not None:
+                        # Todo: Paul to add some checks on stacking     
+                        target = None
+                        if self.current_screen:
+                            for w in reversed(self.current_screen.widgets):
+                                if hasattr(w, 'contains') and w.contains(x, y) and w.visible and w.enabled:
+                                    target = w
+                                    break
+
+                        touch = Touch(x, y, pressed=True)
+
+                        if target is not None:
+                            if hasattr(target, 'on_touch'):
+                                try:
+                                    target.on_touch(touch)
+                                except Exception:
+                                    pass
+                                self._pressed_widget = target
+                            else:
+                                if hasattr(target, 'set_pressed'):
+                                    try:
+                                        target.set_pressed(True)
+                                    except Exception:
+                                        pass
+                                    self._pressed_widget = target
+                else:
+                    # no touch; if we had a pressed widget, release it
+                    if self._pressed_widget is not None:
+                        pw = self._pressed_widget
+                        touch = Touch(0, 0, pressed=False)
+                        if hasattr(pw, 'on_touch'):
+                            try:
+                                pw.on_touch(touch)
+                            except Exception:
+                                pass
+                        elif hasattr(pw, 'set_pressed'):
+                            try:
+                                pw.set_pressed(False)
+                            except Exception:
+                                pass
+                        self._pressed_widget = None
+
+            except Exception:
+                pass
+            await asyncio.sleep_ms(50)
+
     def get_current_screen(self):
         return self.current_screen
 
