@@ -1022,8 +1022,6 @@ class Dial(Widget):
         if value == self.current_value:
             return
         
-        old_value = self.current_value
-        
         # Erase old needle if it was drawn
         if self.last_needle_angle is not None:
             self.erase_needle(self.last_needle_angle)
