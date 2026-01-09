@@ -318,8 +318,6 @@ class Button(Widget):
                 # Calculate alpha blend factor (fades from 0.7 to 0.0)
                 alpha = 0.7 * (1 - i / sheen_height)
                 line_color = _blend_color(display_color, highlight_color, alpha)
-                print(f"Step {i}: alpha={alpha:.2f}, color=0x{line_color:06X}")
-                
                 ili9488.line(self.x + 2, self.y + 2 + i,
                            self.x + self.width - 3, self.y + 2 + i,
                            line_color)
@@ -921,7 +919,6 @@ class ButtonGroup(Widget):
         # pain here is we aren't restricting this to be contained in screenmanager
         # so sort of have to replicate it's decision making here
         target = self.find_at(touch.x, touch.y)
-        print(target)        
         # screen manager will delegate the touch event based on group size
         # won't care which button in the group was pressed
         if touch.pressed and target is not None:
@@ -1557,8 +1554,6 @@ class ScreenManager:
                                             print("Error setting widget pressed state")
                                         pass
                                     self._pressed_widget = target
-                                    print("Current pressed widget is")
-                                    print(self._pressed_widget) 
                     else:
                         self.release_current()
             
