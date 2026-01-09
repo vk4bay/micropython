@@ -504,7 +504,7 @@ class ProgressBar(Widget):
         self.update()
         
         if old_value != self.value and self.on_change:
-            self.on_change(self, self.value)
+            self.on_change(self)
     
     def draw(self):
         """Draw the progress bar."""
@@ -561,7 +561,7 @@ class CheckBox(Widget):
         self.update()
         
         if self.on_change:
-            self.on_change(self, self.checked)
+            self.on_change(self)
     
     def set_checked(self, checked):
         if self.checked != checked:
@@ -570,7 +570,7 @@ class CheckBox(Widget):
             self.update()
             
             if self.on_change:
-                self.on_change(self, self.checked)
+                self.on_change(self)
     
     def draw(self):
         """Draw the checkbox."""
@@ -1810,7 +1810,7 @@ class LineChart(Widget):
         self.update()
         # This might be overkill? but it is optional
         if self.on_point_added:
-            self.on_point_added(self, value, len(self.data_points))
+            self.on_point_added(self, value)
 
     def add_point_fast(self, value):
         """Add point with incremental drawing (faster)."""
@@ -1835,6 +1835,8 @@ class LineChart(Widget):
                 ili9488.set_line_thickness(old_thickness)
     
         self.update()
+        if self.on_point_added:
+            self.on_point_added(self, value)
     
     def clear(self):
         self.data_points = []
@@ -1853,25 +1855,4 @@ class LineChart(Widget):
         self.draw()
         self.update()
 
-
-#for testing
-
-# chart = ui.LineChart(10, 10, 300, 220, max_points=50,
-#                      line_color=ui.COLOR_GREEN,
-#                      bg_color=ui.COLOR_BLACK,
-#                      grid_color=ui.COLOR_GRAY_DARK,
-#                      show_labels=True,
-#                      show_grid=True)
-
-# # Draw initial empty chart
-# chart.draw()
-# ili9488.show()
-
-# # Simulate real-time data (sine wave)
-# angle = 0
-# while True:
-#     value = 50 + 30 * math.sin(math.radians(angle))
-#     chart.add_point(value)
-    
-#     angle = (angle + 10) % 360
-#     time.sleep_ms(100)
+ 
