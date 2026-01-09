@@ -23,7 +23,7 @@ Usage:
 
 import ili9488
 import time
-import uasyncio as asyncio
+import uasyncio 
 
 # Color constants (RGB888 format)
 COLOR_BLACK = 0x000000
@@ -75,6 +75,7 @@ ALIGN_TOP = 0
 ALIGN_MIDDLE = 1
 ALIGN_BOTTOM = 2
 
+DEBUG_UI = False  # Set to True to enable debug output
 
 class Font:
     # Class variable to track if a custom font is set
@@ -836,32 +837,114 @@ def show_dialog(title, message, dialog_type=DIALOG_OK):
         return show_ok_dialog(title, message)
 
 
-class ButtonGroup:
-    """Manager for a group of buttons."""
-    
-    def __init__(self):
+
+class ButtonGroup(Widget):
+    def __init__(self, x, y, width, height, orientation='horizontal', spacing=8):
+        super().__init__(x, y, width, height)
         self.buttons = []
-    
+        self.orientation = orientation  # 'horizontal' or 'vertical'
+        self.spacing = spacing
+        self._pressed_button = None
+
     def add(self, button):
-        """Add a button to the group."""
+        """Add a button to the group and relayout."""
+        # ensure button is contained
         self.buttons.append(button)
-    
-    def draw_all(self):
-        """Draw all buttons in the group."""
+        self._layout()
+
+    def remove(self, button):
+        if button in self.buttons:
+            self.buttons.remove(button)
+            self._layout()
+
+    def clear(self):
+        self.buttons = []
+        self._pressed_button = None
+
+    def _layout(self):
+        n = len(self.buttons)
+        if n == 0:
+            return
+
+        if self.orientation == 'horizontal':
+            total_spacing = self.spacing * (n - 1)
+            avail = max(0, self.width - total_spacing)
+            base_w = avail // n
+            remainder = avail - (base_w * n)
+
+            x = self.x
+            for i, btn in enumerate(self.buttons):
+                w = base_w + (remainder if i == n - 1 else 0)
+                btn.width = w
+                btn.height = self.height
+                btn.x = x
+                btn.y = self.y + (self.height - btn.height) // 2
+                x += w + self.spacing
+        else:
+            total_spacing = self.spacing * (n - 1)
+            avail = max(0, self.height - total_spacing)
+            base_h = avail // n
+            remainder = avail - (base_h * n)
+
+            y = self.y
+            for i, btn in enumerate(self.buttons):
+                h = base_h + (remainder if i == n - 1 else 0)
+                btn.width = self.width
+                btn.height = h
+                btn.x = self.x + (self.width - btn.width) // 2
+                btn.y = y
+                y += h + self.spacing
+
+    def draw(self):
+        if not self.visible:
+            return
         for btn in self.buttons:
-            btn.draw()
-    
-    def update_all(self):
-        """Update all buttons on display."""
-        for btn in self.buttons:
-            btn.update()
-    
+            if btn.visible:
+                btn.draw()
+
+    def update(self):
+        if self.visible:
+            ili9488.update_region(self.x, self.y, self.width, self.height)
+
+    def contains(self, x, y):
+        return (self.x <= x < self.x + self.width and
+                self.y <= y < self.y + self.height)
+
     def find_at(self, x, y):
-        """Find which button (if any) contains the given point."""
         for btn in self.buttons:
             if btn.contains(x, y) and btn.visible and btn.enabled:
                 return btn
         return None
+
+
+    def on_touch(self, touch):
+        # pain here is we aren't restricting this to be contained in screenmanager
+        # so sort of have to replicate it's decision making here
+        target = self.find_at(touch.x, touch.y)
+        print(target)        
+        # screen manager will delegate the touch event based on group size
+        # won't care which button in the group was pressed
+        if touch.pressed and target is not None:
+            if self._pressed_button is not None and self._pressed_button != target:
+                try:
+                    self._pressed_button.set_pressed(False)
+                except Exception:
+                    if DEBUG_UI:
+                        print("Error releasing child pressed")
+            try:
+                target.set_pressed(True)
+            except Exception:
+                if DEBUG_UI:
+                   print("Error setting child pressed")
+            self._pressed_button = target
+        else:
+            if self._pressed_button is not None:
+                try:
+                    self._pressed_button.set_pressed(False)
+                except Exception:
+                    if DEBUG_UI:
+                        print("Error releasing child pressed")
+                self._pressed_button = None
 
 
 class Dial(Widget):
@@ -1402,6 +1485,25 @@ class ScreenManager:
                 except Exception:
                     print("Error: Unable to create touch task for ScreenManager.")
                     self._touch_task = None
+    def release_current(self):
+        if self._pressed_widget is not None:
+            pw = self._pressed_widget
+            touch = Touch(0, 0, pressed=False)
+            if hasattr(pw, 'on_touch'):
+                try:
+                    pw.on_touch(touch)
+                except Exception:
+                    if(DEBUG_UI):
+                        print(touch)   
+                    pass
+            elif hasattr(pw, 'set_pressed'):
+                try:
+                    pw.set_pressed(False)
+                except Exception:
+                    if(DEBUG_UI):
+                        print("Error clearing widget pressed state")
+                    pass
+            self._pressed_widget = None
 
     async def _touch_loop(self):
         while True:
@@ -1413,11 +1515,15 @@ class ScreenManager:
                 try:
                     res = self.get_touch()
                 except Exception:
+                    if(DEBUG_UI):
+                        print("Error getting touch data")
                     res = None
                 if res is not None:
                     try:
                         x, y = res
                     except Exception:
+                        if(DEBUG_UI):
+                            print("Invalid touch data format")
                         x = y = None
 
                     if x is not None:
@@ -1428,14 +1534,18 @@ class ScreenManager:
                                 if hasattr(w, 'contains') and w.contains(x, y) and w.visible and w.enabled:
                                     target = w
                                     break
-
+                        
                         touch = Touch(x, y, pressed=True)
+                        if target is None:
+                           self.release_current()
 
-                        if target is not None:
+                        else:
                             if hasattr(target, 'on_touch'):
                                 try:
                                     target.on_touch(touch)
                                 except Exception:
+                                    if(DEBUG_UI):
+                                        print("Error in widget on_touch")
                                     pass
                                 self._pressed_widget = target
                             else:
@@ -1443,29 +1553,23 @@ class ScreenManager:
                                     try:
                                         target.set_pressed(True)
                                     except Exception:
+                                        if(DEBUG_UI):
+                                            print("Error setting widget pressed state")
                                         pass
                                     self._pressed_widget = target
-                else:
-                    # no touch; if we had a pressed widget, release it
-                    if self._pressed_widget is not None:
-                        pw = self._pressed_widget
-                        touch = Touch(0, 0, pressed=False)
-                        if hasattr(pw, 'on_touch'):
-                            try:
-                                pw.on_touch(touch)
-                            except Exception:
-                                pass
-                        elif hasattr(pw, 'set_pressed'):
-                            try:
-                                pw.set_pressed(False)
-                            except Exception:
-                                pass
-                        self._pressed_widget = None
-
-            except Exception:
+                                    print("Current pressed widget is")
+                                    print(self._pressed_widget) 
+                    else:
+                        self.release_current()
+            
+            except Exception as e:
+                if(DEBUG_UI):
+                    print(e)
+                    print("Error in main loop")
                 pass
             await asyncio.sleep_ms(50)
 
+   
     def get_current_screen(self):
         return self.current_screen
 
@@ -1473,8 +1577,8 @@ class ScreenManager:
         return self.screens.get(name)
 
     def has_screen(self, name):
-        return name in self.screens    
-
+        return name in self.screens  
+ 
 class Transition:
     def animate(self, old_screen, new_screen):
         """Override in subclasses to implement transition effect.
