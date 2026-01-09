@@ -1477,10 +1477,10 @@ class ScreenManager:
         self.get_touch = callback
         if self._touch_task is None:
             try:
-                self._touch_task = asyncio.create_task(self._touch_loop())
+                self._touch_task = uasyncio.create_task(self._touch_loop())
             except AttributeError:
                 try:
-                    loop = asyncio.get_event_loop()
+                    loop = uasyncio.get_event_loop()
                     self._touch_task = loop.create_task(self._touch_loop())
                 except Exception:
                     print("Error: Unable to create touch task for ScreenManager.")
@@ -1509,7 +1509,7 @@ class ScreenManager:
         while True:
             try:
                 if self.get_touch is None:
-                    await asyncio.sleep_ms(50)
+                    await uasyncio.sleep_ms(50)
                     continue
                 res = None
                 try:
@@ -1567,7 +1567,7 @@ class ScreenManager:
                     print(e)
                     print("Error in main loop")
                 pass
-            await asyncio.sleep_ms(50)
+            await uasyncio.sleep_ms(50)
 
    
     def get_current_screen(self):
