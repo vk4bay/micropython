@@ -62,3 +62,9 @@ CONFIG_LOG_TAG_LEVEL_IMPL_CACHE_SIZE=31
 # end of Level Settings
 # end of Log Level
 
+
+# Uncomment these to prevent esp-idf startup messages (but not the bootstrap)
+#CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+#CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+#CONFIG_ESP_CONSOLE_UART_NUM=-1
+
