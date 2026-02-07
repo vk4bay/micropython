@@ -1855,4 +1855,182 @@ class LineChart(Widget):
         self.draw()
         self.update()
 
+class KB(Button3D):
+    def __init__(self, label_upper, label_lower, on_click=None, corner_radius=6):
+        super().__init__(0, 0, 20, 20, "", COLOR_BTN_PRIMARY, COLOR_WHITE,
+                         True, corner_radius, on_click=on_click)
+        self.label_upper = label_upper
+        self.label_lower = label_lower
+        self.is_uppercase = True
  
+    def draw(self):
+        # Draw the button with current label
+        current_label = self.label_upper if self.is_uppercase else self.label_lower
+        self.text = current_label
+        super().draw()   
+
+
+class SpecialKey(KB):
+    def __init__(self, label, on_click=None, width=None, corner_radius=6):
+        # SpecialKey uses same label for upper/lower (e.g. "<-", "Enter")
+        super().__init__(label, label, on_click=on_click, corner_radius=corner_radius)
+        # optional fixed pixel width when laying out
+        self.fixed_width = width
+
+
+#Still a bit rough but it is a start
+# Touch interaction should be handled by ScreenManager and passed to the appropriate KB on_click or on_touch handlers
+# so KB just needs to define its behavior and appearance.
+# Delete/Enter callback checks
+# Max length checks?
+
+
+
+class Keyboard(Widget):
+    def _draw_rounded_rect_filled(self, x, y, w, h, r, color):
+        if r <= 0:
+            ili9488.rect(x, y, w, h, color, color)
+            return
+        ili9488.rect(x + r, y, w - 2 * r, h, color, color)
+        ili9488.rect(x, y + r, r, h - 2 * r, color, color)
+        ili9488.rect(x + w - r, y + r, r, h - 2 * r, color, color)
+        ili9488.circle(x + r, y + r, r, color, color)
+        ili9488.circle(x + w - 1 - r, y + r, r, color, color)
+        ili9488.circle(x + r, y + h - 1 - r, r, color, color)
+        ili9488.circle(x + w - 1 - r, y + h - 1 - r, r, color, color)
+
+    def toggle_layout(self):
+        
+        self.set_uppercase(not self.uppercase)
+        self.draw()
+    def delete_callback(self, kb=None):
+        # remove last char from buffer and redraw
+        if self.buffer:
+            self.buffer = self.buffer[:-1]
+            self.draw()
+
+    def __init__(self, x, y, width, height, uppercase=False, enter_callback=None):
+        super().__init__(x, y, width, height)
+        self.uppercase = uppercase
+        self.enter_callback = enter_callback
+        self.buffer = ""
+        self.letters =  [
+    [KB( "1", "!"), KB("2", "\""), KB( "3", ":"), KB( "4", "$"), KB( "5", "%"), KB("6", "&"), KB("7", "/"), KB("8", "("), KB("9", ")"), KB("=", "=")],
+    [KB( "Q", "q"), KB( "W", "w"), KB( "E", "e"), KB( "R", "r"), KB( "T", "t"), KB( "U", "u"), KB( "I", "i"), KB( "O", "o"), KB( "P", "p")],
+    [KB( "A", "a"), KB( "S", "s"), KB( "D", "d"), KB( "F", "f"), KB( "G", "g"), KB( "H", "h"), KB( "J", "j"), KB( "K", "k"), KB( "L", "l")],
+    [KB( "Z", "z"), KB( "Y", "y"), KB( "X", "x"), KB( "C", "c"), KB( "V", "v"), KB( "B", "b"), KB( "N", "n"), KB( "M", "m"),  SpecialKey("<-", on_click=self.delete_callback, width=35)  ]
+]
+        self.textbox_height = 48
+        self.bg_color = COLOR_GRAY_LIGHT
+        self.border_color = COLOR_BLACK
+        self.textbox_bg = COLOR_WHITE
+        self.textbox_text_color = COLOR_BLACK
+        for row in self.letters:
+            for kb in row:
+                # don't overwrite explicit handlers (e.g. delete)
+                if getattr(kb, "on_click", None) is None:
+                    kb.on_click = self._on_key
+    def set_uppercase(self, uppercase: bool):
+        self.uppercase = uppercase
+        for row in self.letters:
+            for kb in row:
+                kb.is_uppercase = uppercase
+                kb.text = kb.label_upper if uppercase else kb.label_lower
+    def set_text(self, text: str):
+        self.buffer = text
+        self.draw()
+    
+    def append_char(self, ch: str):
+        self.buffer += ch
+        self.draw()
+
+    def _on_key(self, btn):
+        # Append the appropriate character from the clicked KB
+        ch = btn.label_upper if btn.is_uppercase else btn.label_lower
+        # Defensive: ignore non-printing labels
+        if ch is None or ch == "":
+            return
+        # If this is 'Enter' label and an enter_callback exists, call it
+        if ch.lower() == "enter" and self.enter_callback:
+            try:
+                self.enter_callback(self.buffer)
+            except Exception:
+                pass
+            self.clear_text()
+            return
+
+        # append character and redraw
+        self.append_char(ch)
+    def clear_text(self):
+        self.buffer = ""
+        self.draw()
+    def draw(self):
+        r = min(12, min(self.width, self.height) // 8)
+        self._draw_rounded_rect_filled(self.x, self.y, self.width, self.height, r, self.border_color)
+        self._draw_rounded_rect_filled(self.x + 2, self.y + 2, self.width - 4, self.height - 4, max(0, r - 2), self.bg_color)
+        tb_x = self.x + 8
+        tb_y = self.y + 8
+        tb_w = self.width - 16
+        tb_h = self.textbox_height 
+        tb_r = tb_h // 2
+        if tb_h < 8:
+            tb_h = 8
+            tb_r = 4
+        self._draw_rounded_rect_filled(tb_x, tb_y, tb_w, tb_h, tb_r, self.textbox_bg)
+
+        display_text = self.buffer or ""
+ 
+        font = getattr(self, "font", None)
+        if font and hasattr(font, "get_text_width"):
+            # clip to available width minus padding
+            avail = tb_w - 12
+            # simple right-align scroll: show last chars that fit
+            text = display_text
+            while text and font.get_text_width(text) > avail:
+                text = text[1:]
+            ili9488.text(tb_x + 6, tb_y + (tb_h - font.get_text_height()) // 2,
+                         text, self.textbox_text_color, self.textbox_bg, font.size)
+        else:
+            # fallback: naive character clip (8px per char)
+            avail_chars = max(1, (tb_w - 12) // 8)
+            text = display_text[-avail_chars:]
+            ili9488.text(tb_x + 6, tb_y + max(0, (tb_h - 8) // 2), text, self.textbox_text_color, self.textbox_bg)
+
+        # compute area available for keys (below the textbox)
+        keys_y = tb_y + tb_h + 8
+
+        rows = self.letters
+        if not rows:
+            return
+
+        rows_count = len(rows)
+        padding = 6      # left/right padding
+        hgap = 3         # horizontal gap between keys
+        vgap = 4         # vertical gap between rows
+        # Compute button height based on available height
+        avail_height = (self.y + self.height) - keys_y - 8
+        if rows_count > 0:
+            btn_h = max(12, (avail_height - (rows_count + 1) * vgap) // rows_count)
+        else:
+            btn_h = 12
+        # Use the maximum number of columns to compute a uniform button width
+        max_cols = max(len(r) for r in rows)
+        btn_w = max(20, (self.width - (max_cols + 1) * padding) // max_cols)
+        
+        y = keys_y
+        for row in rows:
+            cols = len(row)
+            widths = [(kb.fixed_width if getattr(kb, "fixed_width", None) is not None else btn_w) for kb in row]
+            total_row_width = sum(widths) + (cols - 1) * hgap
+            x = self.x + (self.width - total_row_width) // 2
+            for kb, w in zip(row, widths):
+                label = kb.label_upper if kb.is_uppercase else kb.label_lower
+                kb.x = x
+                kb.y = y
+                kb.width = w
+                kb.height = btn_h
+                kb.text = label
+                kb.draw()
+                x += w + hgap
+            y += btn_h + vgap
+        
