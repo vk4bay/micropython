@@ -444,13 +444,12 @@ class Button3D(Widget):
             self.pressed = pressed
             self.draw()
             self.update()
-            
-            if was_pressed and not pressed and self.on_click:
-                self.on_click(self)
     
     def click(self):
         if self.enabled and self.on_click:
+            self.set_pressed(True)
             self.on_click(self)
+            self.set_pressed(False)  
 
 
 class Panel(Widget):
@@ -1856,26 +1855,59 @@ class LineChart(Widget):
         self.update()
 
 class KB(Button3D):
-    def __init__(self, label_upper, label_lower, on_click=None, corner_radius=6):
+    def __init__(self, labels, on_click=None, corner_radius=1):
         super().__init__(0, 0, 20, 20, "", COLOR_BTN_PRIMARY, COLOR_WHITE,
                          True, corner_radius, on_click=on_click)
-        self.label_upper = label_upper
-        self.label_lower = label_lower
-        self.is_uppercase = True
- 
-    def draw(self):
-        # Draw the button with current label
-        current_label = self.label_upper if self.is_uppercase else self.label_lower
-        self.text = current_label
-        super().draw()   
+        self.labels = list(labels) + [""] * (5 - len(labels))
+        self.current_layer = 0
 
+    def set_layer(self, layer_index):
+        """Set which label to display (0-4)."""
+        self.current_layer = min(max(0, layer_index), 4)
+    
+    def get_label(self):
+        """Get the current label for this layer."""
+        return self.labels[self.current_layer]
+    
+    def draw(self):
+        # Draw just the button background using superclass, then draw centered label
+        saved_text = getattr(self, "text", "")
+        self.text = ""
+        super().draw()
+
+        label = self.get_label()
+        if not label:
+            self.text = saved_text
+            return
+            
+        # try to find a font object
+        font = getattr(self, "font", None) or getattr(ili9488, "font", None) or getattr(ili9488, "_font", None)
+
+        # measure text
+        if font and hasattr(font, "get_text_width"):
+            tw = font.get_text_width(label)
+            th = font.get_text_height() if hasattr(font, "get_text_height") else 8
+            fsize = getattr(font, "size", 1)
+            tx = self.x + (self.width - tw) // 2
+            ty = self.y + max(0, (self.height - th) // 2)
+            ili9488.text(tx, ty, label, getattr(self, "text_color", COLOR_WHITE), None, fsize)
+        else:
+            # fallback: assume fixed 8px char width/height
+            char_w = 8
+            char_h = 8
+            tw = len(label) * char_w
+            tx = self.x + (self.width - tw) // 2
+            ty = self.y + max(0, (self.height - char_h) // 2)
+            ili9488.text(tx, ty, label, getattr(self, "text_color", COLOR_WHITE), None)
+
+        self.text = saved_text
 
 class SpecialKey(KB):
     def __init__(self, label, on_click=None, width=None, corner_radius=6):
-        # SpecialKey uses same label for upper/lower (e.g. "<-", "Enter")
-        super().__init__(label, label, on_click=on_click, corner_radius=corner_radius)
-        # optional fixed pixel width when laying out
+        # SpecialKey uses same label across all layers
+        super().__init__((label, label, label, label, label), on_click=on_click, corner_radius=corner_radius)
         self.fixed_width = width
+        self.color = COLOR_GREEN
 
 
 #Still a bit rough but it is a start
@@ -1900,13 +1932,34 @@ class Keyboard(Widget):
         ili9488.circle(x + w - 1 - r, y + h - 1 - r, r, color, color)
 
     def toggle_layout(self):
-        
-        self.set_uppercase(not self.uppercase)
+        self.current_layer = (self.current_layer + 1) % 5
+        for row in self.letters:
+            for kb in row:
+                kb.set_layer(self.current_layer)
+        self.draw()
+
+    def sym_callback(self, kb=None):
+        self.toggle_layout()
+    
+    def set_text(self, text: str):
+        self.buffer = text
+        # keep caret at end for expected backspace behavior
+        self.caret_pos = len(text)
         self.draw()
     def delete_callback(self, kb=None):
-        # remove last char from buffer and redraw
-        if self.buffer:
-            self.buffer = self.buffer[:-1]
+        # Backspace: remove character before caret and move caret left.
+        if not self.buffer:
+            return
+        if self.caret_pos > len(self.buffer):
+            self.caret_pos = len(self.buffer)
+        if self.caret_pos == 0:
+            self.caret_pos = len(self.buffer)
+
+        if self.caret_pos > 0:
+            self.buffer = self.buffer[:self.caret_pos - 1] + self.buffer[self.caret_pos:]
+            self.caret_pos -= 1
+            self.caret_visible = True
+            self._last_caret_toggle = time.ticks_ms()
             self.draw()
 
     def __init__(self, x, y, width, height, uppercase=False, enter_callback=None):
@@ -1914,12 +1967,64 @@ class Keyboard(Widget):
         self.uppercase = uppercase
         self.enter_callback = enter_callback
         self.buffer = ""
-        self.letters =  [
-    [KB( "1", "!"), KB("2", "\""), KB( "3", ":"), KB( "4", "$"), KB( "5", "%"), KB("6", "&"), KB("7", "/"), KB("8", "("), KB("9", ")"), KB("=", "=")],
-    [KB( "Q", "q"), KB( "W", "w"), KB( "E", "e"), KB( "R", "r"), KB( "T", "t"), KB( "U", "u"), KB( "I", "i"), KB( "O", "o"), KB( "P", "p")],
-    [KB( "A", "a"), KB( "S", "s"), KB( "D", "d"), KB( "F", "f"), KB( "G", "g"), KB( "H", "h"), KB( "J", "j"), KB( "K", "k"), KB( "L", "l")],
-    [KB( "Z", "z"), KB( "Y", "y"), KB( "X", "x"), KB( "C", "c"), KB( "V", "v"), KB( "B", "b"), KB( "N", "n"), KB( "M", "m"),  SpecialKey("<-", on_click=self.delete_callback, width=35)  ]
-]
+        self.caret_pos = 0                # index in buffer where next char is inserted
+        self.caret_visible = True
+        self.caret_blink_ms = 500         # blink interval
+        self._last_caret_toggle = time.ticks_ms()
+        self.scroll_offset = 0
+        self.current_layer = 0
+#         self.letters =  [
+#     [KB( "1", "!"), KB("2", "\""), KB( "3", ":"), KB( "4", "$"), KB( "5", "%"), KB("6", "&"), KB("7", "/"), KB("8", "("), KB("9", ")"), KB("=", "=")],
+#     [KB( "Q", "q"), KB( "W", "w"), KB( "E", "e"), KB( "R", "r"), KB( "T", "t"), KB( "U", "u"), KB( "I", "i"), KB( "O", "o"), KB( "P", "p"),SpecialKey("del", on_click=self.delete_callback, width=50)], 
+#     [KB( "A", "a"), KB( "S", "s"), KB( "D", "d"), KB( "F", "f"), KB( "G", "g"), KB( "H", "h"), KB( "J", "j"), KB( "K", "k"), KB( "L", "l"),SpecialKey("sym", on_click=self.sym_callback, width=50) ],
+#     [KB( "Z", "z"), KB( "Y", "y"), KB( "X", "x"), KB( "C", "c"), KB( "V", "v"), KB( "B", "b"), KB( "N", "n"), KB( "M", "m"), SpecialKey("<", on_click=self.move_caret_left, width=40),
+#      SpecialKey(">", on_click=self.move_caret_right, width=40),  SpecialKey("ent", on_click=self.enter_callback, width=50) ]
+# ]
+        self.letters = [
+            [
+                KB(("a", "A", "1", "!", "[")), 
+                KB(("b", "B", "2", "@", "]")), 
+                KB(("c", "C", "3", "#", "{")), 
+                KB(("d", "D", "4", "$", "}")), 
+                KB(("e", "E", "5", "%", "\\")), 
+                KB(("f", "F", "6", "^", "|")),
+                KB(("g", "G", "7", "&", "<")), 
+                SpecialKey("del", on_click=lambda btn: self.delete_callback(btn), width=60)
+            ],
+            [
+                KB(("h", "H", "8", "*", ">")), 
+                KB(("i", "I", "9", "(", "~")), 
+                KB(("j", "J", "0", ")", "`")), 
+                KB(("k", "K", "+", "=", "£")), 
+                KB(("l", "L", "-", "_", "€")),
+                KB(("m", "M", "*", ":", "°")), 
+                KB(("n", "N", "/", ";", "¥")), 
+                SpecialKey("sym", on_click=lambda btn: self.sym_callback(btn), width=60)
+            ],
+            [
+                KB(("o", "O", ".", "\"", "§")), 
+                KB(("p", "P", ",", "'", "¶")), 
+                KB(("q", "Q", "?", "•", "†")), 
+                KB(("r", "R", "!", "...", "‡")),
+                KB(("s", "S", "&", "@", "™")),
+                KB(("t", "T", "#", "$", "®")),
+                KB(("u", "U", "%", "^", "©")),
+            ],
+            [
+                KB(("v", "V", "(", ")", "µ")),
+                KB(("w", "W", "[", "]", "±")),
+                KB(("x", "X", "{", "}", "÷")),
+                KB(("y", "Y", "<", ">", "¢")),
+                KB(("z", "Z", "|", "/", "¤")),
+            ],
+            [
+                SpecialKey("<", on_click=lambda btn: self.move_caret_left(btn), width=45),
+                KB((" ", " ", " ", " ", " ")),  # spacebar
+                SpecialKey(">", on_click=lambda btn: self.move_caret_right(btn), width=45),
+                SpecialKey("ent", on_click=lambda btn: self.enter_callback(self.buffer) if self.enter_callback else None, width=80)
+            ]
+        ]
+        self.letters[4][1].fixed_width = self.width - 200
         self.textbox_height = 48
         self.bg_color = COLOR_GRAY_LIGHT
         self.border_color = COLOR_BLACK
@@ -1946,24 +2051,53 @@ class Keyboard(Widget):
 
     def _on_key(self, btn):
         # Append the appropriate character from the clicked KB
-        ch = btn.label_upper if btn.is_uppercase else btn.label_lower
+        ch = btn.get_label()
         # Defensive: ignore non-printing labels
         if ch is None or ch == "":
             return
-        # If this is 'Enter' label and an enter_callback exists, call it
-        if ch.lower() == "enter" and self.enter_callback:
-            try:
-                self.enter_callback(self.buffer)
-            except Exception:
-                pass
-            self.clear_text()
-            return
+ 
+        self.buffer = self.buffer[:self.caret_pos] + ch + self.buffer[self.caret_pos:]
+        self.caret_pos += len(ch)
+        self.caret_visible = True
+        self._last_caret_toggle = time.ticks_ms()
+        self.draw()
 
-        # append character and redraw
-        self.append_char(ch)
     def clear_text(self):
         self.buffer = ""
+        self.caret_pos = 0
+        self.scroll_offset = 0
         self.draw()
+    def move_caret_left(self, kb=None):
+        if self.caret_pos > 0:
+            self.caret_pos -= 1
+            self.caret_visible = True
+            self._last_caret_toggle = time.ticks_ms()
+            self.draw()
+    def set_caret_at_pixel(self, px):
+ 
+        font = getattr(self, "font", None)
+        if font and hasattr(font, "get_text_width"):
+            for i in range(len(self.buffer)+1):
+                w = font.get_text_width(self.buffer[:i])
+                if w >= px:
+                    self.caret_pos = i
+                    break
+            else:
+                self.caret_pos = len(self.buffer)
+        else:
+            char_w = 8
+            self.caret_pos = min(len(self.buffer), max(0, px // char_w))
+        self.caret_visible = True
+        self._last_caret_toggle = time.ticks_ms()
+        self.draw()
+
+    def move_caret_right(self, kb=None):
+        if self.caret_pos < len(self.buffer):
+            self.caret_pos += 1
+            self.caret_visible = True
+            self._last_caret_toggle = time.ticks_ms()
+            self.draw()
+    
     def draw(self):
         r = min(12, min(self.width, self.height) // 8)
         self._draw_rounded_rect_filled(self.x, self.y, self.width, self.height, r, self.border_color)
@@ -1988,13 +2122,47 @@ class Keyboard(Widget):
             text = display_text
             while text and font.get_text_width(text) > avail:
                 text = text[1:]
+
+            total_prefix_w = font.get_text_width(self.buffer[:self.caret_pos])
+            # adjust scroll_offset to keep caret visible
+            padding = 6
+            if total_prefix_w - self.scroll_offset > (avail - padding):
+                self.scroll_offset = total_prefix_w - (avail - padding)
+            if total_prefix_w - self.scroll_offset < 0:
+                self.scroll_offset = total_prefix_w
+
+            # draw visible substring using scroll_offset: find first char index that fits offset
+            # simple approach: build visible text by trimming from left until width <= avail + scroll_offset
+            vis_text = display_text
+            while vis_text and font.get_text_width(vis_text) > (avail + self.scroll_offset):
+                vis_text = vis_text[:-1]
+            # find left-trimmed substring to start at scroll_offset
+            left_index = 0
+            while left_index < len(display_text) and font.get_text_width(display_text[:left_index]) < self.scroll_offset:
+                left_index += 1
+            visible = display_text[left_index:left_index+len(vis_text)]
+                             
             ili9488.text(tb_x + 6, tb_y + (tb_h - font.get_text_height()) // 2,
                          text, self.textbox_text_color, self.textbox_bg, font.size)
+            caret_px = font.get_text_width(self.buffer[:self.caret_pos]) - (font.get_text_width(self.buffer[:left_index]) if left_index>0 else 0)
+            caret_x = tb_x + 6 + caret_px - self.scroll_offset
+
         else:
             # fallback: naive character clip (8px per char)
             avail_chars = max(1, (tb_w - 12) // 8)
             text = display_text[-avail_chars:]
             ili9488.text(tb_x + 6, tb_y + max(0, (tb_h - 8) // 2), text, self.textbox_text_color, self.textbox_bg)
+            caret_x = tb_x + 6 + (self.caret_pos * 8) - self.scroll_offset
+
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._last_caret_toggle) >= self.caret_blink_ms:
+            self.caret_visible = not self.caret_visible
+            self._last_caret_toggle = now
+
+        if self.caret_visible:
+            c_x = int(caret_x)
+            if c_x >= tb_x + 4 and c_x <= tb_x + tb_w - 4:
+                ili9488.rect(c_x, tb_y + 4, 1, tb_h - 8, self.textbox_text_color, self.textbox_text_color)
 
         # compute area available for keys (below the textbox)
         keys_y = tb_y + tb_h + 8
@@ -2005,8 +2173,8 @@ class Keyboard(Widget):
 
         rows_count = len(rows)
         padding = 6      # left/right padding
-        hgap = 3         # horizontal gap between keys
-        vgap = 4         # vertical gap between rows
+        hgap = 1         # horizontal gap between keys
+        vgap = 1         # vertical gap between rows
         # Compute button height based on available height
         avail_height = (self.y + self.height) - keys_y - 8
         if rows_count > 0:
@@ -2024,7 +2192,7 @@ class Keyboard(Widget):
             total_row_width = sum(widths) + (cols - 1) * hgap
             x = self.x + (self.width - total_row_width) // 2
             for kb, w in zip(row, widths):
-                label = kb.label_upper if kb.is_uppercase else kb.label_lower
+                label = kb.get_label()
                 kb.x = x
                 kb.y = y
                 kb.width = w
@@ -2033,4 +2201,3 @@ class Keyboard(Widget):
                 kb.draw()
                 x += w + hgap
             y += btn_h + vgap
-        
