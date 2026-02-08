@@ -444,13 +444,12 @@ class Button3D(Widget):
             self.pressed = pressed
             self.draw()
             self.update()
-            
-            if was_pressed and not pressed and self.on_click:
-                self.on_click(self)
     
     def click(self):
         if self.enabled and self.on_click:
+            self.set_pressed(True)
             self.on_click(self)
+            self.set_pressed(False)  
 
 
 class Panel(Widget):
@@ -2005,8 +2004,8 @@ class Keyboard(Widget):
 
         rows_count = len(rows)
         padding = 6      # left/right padding
-        hgap = 3         # horizontal gap between keys
-        vgap = 4         # vertical gap between rows
+        hgap = 0         # horizontal gap between keys
+        vgap = 0         # vertical gap between rows
         # Compute button height based on available height
         avail_height = (self.y + self.height) - keys_y - 8
         if rows_count > 0:
